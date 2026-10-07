@@ -4,6 +4,77 @@ import { hash, requireThat } from './store.mjs'
 const base = JSON.parse(
   readFileSync(new URL('../templates/qwen/api.v1.json', import.meta.url))
 ).graph
+const nativeTemplate = JSON.parse(
+  readFileSync(new URL('../templates/qwen/ui.v1.json', import.meta.url))
+).workflow
+// A serialized native LoadImage instance captured by the real frontend roundtrip.
+const referenceTemplate = JSON.parse(
+  readFileSync(
+    new URL(
+      '../docs/sean-studio/native-reference-roundtrip.json',
+      import.meta.url
+    )
+  )
+).workflow.nodes.find((n) => n.type === 'LoadImage')
+export function nativeSnapshot(graph) {
+  const workflow = structuredClone(nativeTemplate)
+  workflow.extra = {
+    ...workflow.extra,
+    owner: 'Sean',
+    representation: 'compiled_from_native_template'
+  }
+  for (const [id, entry] of Object.entries(graph)) {
+    let node = workflow.nodes.find((n) => String(n.id) === id)
+    if (!node) {
+      requireThat(
+        entry.class_type === 'LoadImage',
+        'unknown fixed template node'
+      )
+      node = structuredClone(referenceTemplate)
+      node.id = Number(id)
+      node.pos = [1170, (Number(id) - 10) * 220]
+      workflow.nodes.push(node)
+    }
+    const names = Object.keys(node.widgets_values_named || {})
+    for (const [name, value] of Object.entries(entry.inputs))
+      if (!Array.isArray(value)) {
+        const index = names.indexOf(name)
+        requireThat(index >= 0, `native scalar binding missing: ${id}.${name}`)
+        node.widgets_values[index] = value
+        node.widgets_values_named[name] = value
+      }
+    for (const input of node.inputs || []) input.link = null
+    for (const output of node.outputs || []) output.links = []
+  }
+  workflow.links = []
+  let next = 0
+  for (const [id, entry] of Object.entries(graph))
+    for (const [name, value] of Object.entries(entry.inputs))
+      if (Array.isArray(value)) {
+        const target = workflow.nodes.find((n) => String(n.id) === id),
+          source = workflow.nodes.find((n) => String(n.id) === String(value[0]))
+        let slot = target.inputs.findIndex((i) => i.name === name)
+        if (slot < 0) {
+          requireThat(/^images\.image_\d+$/.test(name), 'unknown dynamic slot')
+          slot = target.inputs.length
+          target.inputs.push({ name, type: 'IMAGE', link: null })
+        }
+        const link = ++next
+        target.inputs[slot].link = link
+        source.outputs[value[1]].links.push(link)
+        workflow.links.push([
+          link,
+          source.id,
+          value[1],
+          target.id,
+          slot,
+          target.inputs[slot].type
+        ])
+      }
+  workflow.last_node_id = Math.max(...workflow.nodes.map((n) => Number(n.id)))
+  workflow.last_link_id = next
+  return workflow
+}
 export function compileQwen(input = {}, prefix = 'sean_entity_canvas_preview') {
   const g = structuredClone(base)
   const prompt =

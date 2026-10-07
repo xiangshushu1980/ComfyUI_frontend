@@ -1,39 +1,50 @@
-# Implementation and evidence
+# v0.2 implementation and verification
 
-Owner: Sean. 2026-10-07. Development task remote-31356340-f29d-4fd4-9919-e4abac5bf291.
+Owner: Sean. Updated 2026-10-07. Task `remote-31356340-f29d-4fd4-9919-e4abac5bf291`.
+Authority: [AI video creation v0.2](../design/sean_ai_video_creation_v0_2.md).
 
-## Upstream seams
+## Current behavior
 
-- `src/router.ts`: root GraphView replaced by StudioView, retaining the upstream app/bootstrap/Pinia/environment.
-- `vite.config.mts`: `SEAN_STUDIO=1` sends native routes through the private gateway, with no direct ComfyUI proxy bypass.
-- `AGENTS.md`: studio development contract replaces upstream contributor instructions.
-- `.gitignore`: private toolchain and development evidence/cache exclusions.
+The root view is `WorkflowStudioView.vue`. Its durable LGraph projects chapters, scenes, entities, pending proposals and resources. Workflow definitions and native agent conversations are not business nodes. Run chips and dashed execution bindings are a separate overlay. Completed/failed runs are hidden by default and remain accessible in history and resource provenance. Chapter focus selects related entities; concept and three-view images expand on the canvas. Layout uses compact category columns; view scale/offset persist privately. This is the initial layout choice, not a large-project performance claim.
 
-New code is confined to `src/sean-studio/`, `server/`, `pi/`, `templates/qwen/`, `manifests/`, and `scripts/sean-studio/`. Creative projection has its own LGraph/LGraphCanvas; one upstream ComfyApp owns the execution graph. Inactive canvases stop rendering. Native shared WebSocket initialization is disabled; the run observer owns scoped backend events. No free native queue/edit controls are mounted.
+`server/workflows.mjs` owns StructureNovel, ExtractEntities, CreateEntity and GenerateThreeView. HTTP, `scripts/sean-studio/workflow.mjs`, manual import/reference/confirmation controls and the bound Pi tool use these operations. Workflow definitions are versioned capabilities; runs hold immutable input revisions, parameters, child runs and output references. Data relations remain independent of execution relations.
 
-## Evidence so far
+Novel import accepts text/Markdown and deterministically recognizes Chinese chapter headings, Chapter headings and Markdown headings. Chapters retain source offsets, paragraph anchors and hashes. This is structural splitting, not an AI rewriting algorithm. Compatible legacy chapters keep their IDs; superseded duplicates remain in history. ExtractEntities reads source text through audited, paginated tools and submits proposals. Individual human confirmation preserves earlier endpoint mappings and creates chapter/entity relations. Scene state continues to use entity_use without overwriting identity.
 
-- Shared runtime read-only observation: ComfyUI 0.37.0, actual frontend 1.52.7, Qwen core nodes registered; queue empty at initial inspection. No shared restart/upgrade.
-- Native nine-node graph construction using registered definitions, graphToPrompt export, service-side UI/API verification succeeded. UI workflow saved in templates/qwen/ui.v1.json.
-- Private SQLite/outbox, atomic adoption, source anchors, immutable revisions, project boundaries and scene isolation tests pass.
-- Once-only actions, expiry, duplicate consumption and uncertain submission no-repost tests pass without GPU/model calls.
-- Public gateway rejects raw shared writes; compatibility settings are private; public snapshots/events redact session capabilities and receipts.
-- Native PiWeb 0.10.0 / SDK 1.0.0 loaded the exact user-approved product workspace extension. SDK only auto-discovers .js/.ts (not .mjs); installed entry uses .js while canonical module remains .mjs.
-- Real PI read-source audit saved original paragraph hashes. Early weak tool catalog generated structurally unusable candidates; retained with schema_invalid status, never adopted. Strict catalog/validation now rejects those fields.
-- Actual provider request audit confirms product prompt and only entity_studio declarations; current configured deepseek-flash model declares text/image input. Actual image understanding still requires a successful view_image call and user review.
-- Native ten-node graph with one synthetic reference completed the real registered-node import/export and service verifier; see `native-reference-roundtrip.json`. This checks slot wiring, not image generation.
-- Eleven automated tests pass, including replacing an input revoking its old unconsumed authorization and actual provider-payload identity/tool filtering. Frontend typecheck and production build pass after native historical snapshot support.
+CreateEntity collects registered image/text references and automatically binds target/context. A human grants at most four concepts and optionally one downstream three-view, with expiry and entity revision checking. Concept calls create parallel business children; shared GPU execution is serialized by queue checks and hive-resource leases. Formal appearance confirmation records the selected asset, updates its resource status, and automatically schedules the already-authorized fixed three-view using that appearance. The agent cannot confirm facts or appearance. The fixed three-view instruction comes from the existing reviewed Qwen multiview template; this does not establish its visual quality.
 
-## Pending acceptance
+Generated assets retain source asset IDs, child Run IDs, business Run IDs, graph hashes and parameters. Native snapshots are compiled from real registered-node templates and available read-only. PNG references are content-addressed in the private store; thumbnails are genuine cached images bounded to 384 pixels.
 
-Full native UI/PI two-round Qwen generation, node-event mapping, actual collection/cleanup and image quality have not yet passed end-to-end acceptance. Human adoption and appearance selection remain explicit product operations; no test or model reply substitutes for them. Current application data is a development acceptance project and has no adopted entities or confirmed appearance. Real PI has submitted four valid entity candidates plus their former-colleague relationship; user adoption is pending.
+Agent conversation remains in independent Pi Web. Workflow/target scope resumes its own continuous session; automatic context uses live references, not copies of the full novel. Canvas shows a short status/output preview and exact-session link. Pi Web intentionally hides idle transient sessions: the bridge records a guarded read-only initialization turn and checks the exact session's presence in the native catalog before navigation. Failed launch never falls back to the Pi Web root. Initialization cannot generate or adopt anything. Workspace trust remains exact and explicit.
 
-## Known implementation limits under review
+## Verification on 2026-10-07
 
-Thumbnails currently return original PNG bytes; add a true cached reduced image before treating large asset sets as performance-validated. Native PI SSE reconnect uses history snapshots but still needs adversarial stream/snapshot interleaving checks. Waiting-resource and collecting states expose no invented sampling percentage. Global third-party extensions execute as trusted host code; the tool hook is not a process sandbox. Compatibility promises cover the fixed Qwen node set only.
+- 17 automated tests pass: transaction/replay, project/source boundaries, partial confirmation, stale inputs, unknown-submit no repost, scope/budget, parallel concepts → serial three-view binding, migration, exact-session navigation, real PNG ingestion and cached thumbnail dimensions.
+- Frontend typecheck, targeted lint and production build passed during implementation; final commit checks record the latest result.
+- The real registered frontend imported/exported the new nine-node snapshot. A two-reference eleven-node snapshot also passed the service UI/API verifier. [Captured multi-reference evidence](native-multi-reference-roundtrip.json) uses synthetic image names and establishes wiring only, not image reading/generation.
+- Real Pi Web ExtractEntities read the first chapter and created Run `c0ecc3e8-0cab-4535-8033-4f622d2e1e45` and proposal `a568e1f5-d19c-4c3b-b9ee-c81d5a85f2d5`, waiting for individual human confirmation. No facts from the user's story were adopted.
+- User explicitly trusted isolated test workspace `b6d01a80-8662-413e-b33e-0a1450733380/agent-workspace/36a3709a-2927-4ea4-8f63-603c35c5e9c9`. Its test entity and grant carry automated_test provenance. Real Pi Web Agent called the shared generation operation and created two-child Concept Run `72ef5762-ac87-4d6d-9db6-594fa83362d0` with automatic entity input binding.
+- Actual generation failed in shared ComfyUI VAELoader/model-management synchronization with `torch.AcceleratorError: CUDA error: unknown error`. The other still-pending item was cancelled by its own prompt ID; no global interrupt/restart was performed. Shared queue is empty and this task's lease was released. There are no generated assets or selected appearance from this real test.
+- An early empty-session link restored the old native conversation; scope/grant checks rejected its generation instruction. The test was stopped, a correction was sent to the old conversation, and catalog-verified initialization plus regression coverage fixed navigation. This incident did not produce images or adopt facts.
 
-## Sean’s interaction revision (2026-10-07)
+## Outstanding acceptance and limits
 
-User instruction supersedes the embedded-chat portions of the original transport design: Agent work moves to PiWeb. Canvas retains only a narrow status/output card, explicit context handoff, and exact-session navigation. Removed frontend chat rendering, composer, stop control and message SSE. Server obtains lightweight native state/history summaries and supports receipt issuance for direct PiWeb input; the bound extension ends its audited turn on agent_end. Model/provider settings and shared ComfyUI lifecycle are unchanged. One-use generation authorization is handed to the next direct native turn, rather than sending a model prompt from the canvas.
+Real candidate collection/cleanup, visual inspection, human appearance confirmation, automatic real three-view output and refresh/recovery through that successful chain remain unverified until the shared CUDA runtime is restored. Unit boundary fixtures prove scheduling and provenance, not model success. No restart authorization is implied by workspace trust.
 
-Legacy server send/history/event endpoints remain for compatibility but are no longer used by the product UI. This change does not imply adoption or generation acceptance.
+Reference collection currently registers local PNGs, existing assets, text and source URLs; it does not automatically browse/download external websites. Large-novel indexing, large-canvas performance, persisted user-dragged layout, explicit session pause/resume controls, candidate rejection/correction UI and pre-submit rebinding UI need further work. Pi Web stop/continuous conversation and waiting-confirmation continuation remain available. Native compatibility is limited to the fixed Qwen node set. Product tool filtering is not an OS process sandbox; trusted host extensions still run as host code. Full video/audio and cross-Workflow orchestration remain outside this MVP.
+
+## Running and API
+
+Use the existing private Studio server on 4318 and Vite preview on 5318. ComfyUI at 8188 and Pi Web at 30141 are shared existing services; never start a second ComfyUI instance. Private SQLite/media/workspaces live under `~/.local/share/entity-canvas-studio`.
+
+```sh
+node --test server/*.test.mjs
+node scripts/sean-studio/workflow.mjs definitions
+node scripts/sean-studio/workflow.mjs context <session-id>
+node scripts/sean-studio/workflow.mjs open <project-id> CreateEntity <request.json>
+node scripts/sean-studio/workflow.mjs operate <session-id> generate_concepts <request.json>
+```
+
+HTTP base is `/studio-api/v1`; writes require requestId. Human generation grants and appearance selection are separate explicit endpoints, not agent tools. Unknown submissions reconcile their original execution key and never automatically repost. Cancel only the run's pending prompt; a running shared generation cannot be globally interrupted from Studio.
+
+Upstream seams remain `src/router.ts`, `vite.config.mts`, project AGENTS and ignores. Business code stays under `src/sean-studio`, `server`, `pi`, `templates/qwen`, and `scripts/sean-studio`. Preserve upstream GPL licensing. Only upstream ComfyUI git remote exists; do not publish Sean's branch to upstream.

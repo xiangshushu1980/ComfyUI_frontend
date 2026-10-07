@@ -5,9 +5,11 @@ import { join, resolve, extname } from 'node:path'
 import { readFile, stat } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { Store, hash, requireThat } from './store.mjs'
-import { createSource, propose, adopt } from './domain.mjs'
+import { createSource, propose } from './domain.mjs'
 import { Execution } from './execution.mjs'
 import { PiBridge } from './pi-bridge.mjs'
+import { Workflows, definitions } from './workflows.mjs'
+import { ingestPng, thumbnail } from './media.mjs'
 import { compileQwen, verifyWorkflow } from './qwen.mjs'
 import { nativeGateway, readBody } from './gateway.mjs'
 export function createStudioServer({
@@ -20,6 +22,19 @@ export function createStudioServer({
   const execution = new Execution(store, dataDir, comfyUrl)
   const pi = new PiBridge(store, dataDir)
   pi.execution = execution
+  const workflows = new Workflows(store, execution)
+  store.transaction(() => {
+    for (const row of store.db.prepare('SELECT id FROM projects').all())
+      workflows.migrate(row.id)
+  })
+  pi.workflows = workflows
+  const workflowTimer = setInterval(() => {
+    try {
+      workflows.sync()
+    } catch (error) {
+      console.error('Workflow projection failed:', error.message)
+    }
+  }, 1000)
   const publicObject = (o) => {
     const { capability, receipt, cwd, ...safe } = o
     return safe
@@ -47,8 +62,10 @@ export function createStudioServer({
           cap = req.headers.authorization?.replace(/^Bearer /, '')
         let result
         if (url.pathname === '/internal/pi/bind') result = pi.bind(cap, b)
-        else if (url.pathname === '/internal/pi/direct-input') result = pi.directInput(cap, b)
-        else if (url.pathname === '/internal/pi/direct-end') result = pi.directEnd(cap, b)
+        else if (url.pathname === '/internal/pi/direct-input')
+          result = pi.directInput(cap, b)
+        else if (url.pathname === '/internal/pi/direct-end')
+          result = pi.directEnd(cap, b)
         else if (url.pathname === '/internal/pi/receipt')
           result = pi.receipt(cap, b)
         else if (url.pathname === '/internal/pi/request-audit') {
@@ -83,6 +100,89 @@ export function createStudioServer({
       }
       const path = url.pathname.replace(/^\/studio-api\/v1/, '')
       if (url.pathname.startsWith('/studio-api/v1')) {
+        if (path === '/workflow-definitions' && req.method === 'GET')
+          return send(definitions)
+        if (
+          (m = path.match(/^\/entities\/([^/]+)\/reference-image$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req),
+            entity = store.get(m[1])
+          requireThat(
+            entity.kind === 'entity' && typeof b.data === 'string',
+            'entity and PNG data required'
+          )
+          const metadata = await ingestPng(
+            dataDir,
+            Buffer.from(b.data, 'base64')
+          )
+          return send(
+            store.write(path, b, () => {
+              const asset = store.create(entity.projectId, 'asset', {
+                ...metadata,
+                name: b.name || '参考图',
+                runId: null,
+                origin: 'human_upload',
+                sourceAssetIds: []
+              })
+              const session = workflows.open(entity.projectId, {
+                workflowId: 'CreateEntity',
+                targetId: entity.id
+              })
+              return workflows.addReference(session.id, {
+                type: 'image',
+                name: b.name,
+                assetId: asset.id
+              })
+            }),
+            201
+          )
+        }
+        if (
+          (m = path.match(/^\/projects\/([^/]+)\/workflow-sessions$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          return send(
+            store.write(path, b, () => workflows.open(m[1], b)),
+            201
+          )
+        }
+        if (
+          (m = path.match(/^\/workflow-sessions\/([^/]+)\/context$/)) &&
+          req.method === 'GET'
+        )
+          return send(workflows.context(m[1]))
+        if (
+          (m = path.match(/^\/workflow-sessions\/([^/]+)\/authorize$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          return send(
+            store.write(path, b, () => workflows.authorize(m[1], b)),
+            201
+          )
+        }
+        if (
+          (m = path.match(
+            /^\/workflow-sessions\/([^/]+)\/operations\/([a-z_]+)$/
+          )) &&
+          req.method === 'POST'
+        )
+          return send(
+            workflows.operate(m[1], m[2], await readBody(req), 'human'),
+            201
+          )
+        if (
+          (m = path.match(/^\/projects\/([^/]+)\/novels$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          return send(
+            store.write(path, b, () => workflows.structure(m[1], b)),
+            201
+          )
+        }
         if (path === '/templates/qwen' && req.method === 'GET')
           return send(compileQwen())
         if (path === '/templates/qwen/verify' && req.method === 'POST') {
@@ -91,24 +191,69 @@ export function createStudioServer({
           store.compatSet('qwen-template-ui.v1', result)
           return send(result)
         }
-        if ((m = path.match(/^\/discussions\/([^/]+)\/agent-status$/)) && req.method === 'GET') {
-          const d = store.get(m[1]), binding = store.list(d.projectId, 'pi_binding').find(b => b.discussionId === d.id)
-          if (!binding?.sessionId) return send({ working: false, summary: '', piWebUrl: null })
-          const state = await pi.request(`/api/agent/${binding.sessionId}`, { type: 'get_state' })
+        if (
+          (m = path.match(/^\/discussions\/([^/]+)\/agent-status$/)) &&
+          req.method === 'GET'
+        ) {
+          const d = store.get(m[1]),
+            binding = store
+              .list(d.projectId, 'pi_binding')
+              .find((b) => b.discussionId === d.id)
+          if (!binding?.sessionId)
+            return send({ working: false, summary: '', piWebUrl: null })
+          const state = await pi.request(`/api/agent/${binding.sessionId}`, {
+            type: 'get_state'
+          })
           const history = await pi.messages(d.id)
           const entries = history.context?.messages || history.context || []
-          const messages = Array.isArray(entries) ? entries.map(e => e.message || e) : []
-          const latest = [...messages].reverse().find(m => m.role === 'assistant')
-          const summary = typeof latest?.content === 'string' ? latest.content : (latest?.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
-          return send({ working: Boolean(state.data?.isStreaming || state.data?.isPromptRunning), summary: summary.slice(-600), piWebUrl: pi.publicBinding(binding).piWebUrl })
+          const messages = Array.isArray(entries)
+            ? entries.map((e) => e.message || e)
+            : []
+          const latest = [...messages]
+            .reverse()
+            .find((m) => m.role === 'assistant')
+          const summary =
+            typeof latest?.content === 'string'
+              ? latest.content
+              : (latest?.content || [])
+                  .filter((b) => b.type === 'text')
+                  .map((b) => b.text)
+                  .join('\n')
+          return send({
+            working: Boolean(
+              state.data?.isStreaming || state.data?.isPromptRunning
+            ),
+            summary: summary.slice(-600),
+            piWebUrl: pi.publicBinding(binding).piWebUrl
+          })
         }
-        if ((m = path.match(/^\/discussions\/([^/]+)\/pi-context$/)) && req.method === 'POST') {
-          const b = await readBody(req), d = store.get(m[1])
-          return send(store.write(path, b, () => {
-            for (const c of b.links || []) requireThat(store.sameProject(c.id, d.projectId).revision === c.revision, 'context revision conflict', 409)
-            if (b.actionId) requireThat(store.sameProject(b.actionId, d.projectId, 'action').status === 'authorized', 'action unavailable', 403)
-            return store.update(d.id, d.revision, { links: b.links || [], pendingActionId: b.actionId || null })
-          }))
+        if (
+          (m = path.match(/^\/discussions\/([^/]+)\/pi-context$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req),
+            d = store.get(m[1])
+          return send(
+            store.write(path, b, () => {
+              for (const c of b.links || [])
+                requireThat(
+                  store.sameProject(c.id, d.projectId).revision === c.revision,
+                  'context revision conflict',
+                  409
+                )
+              if (b.actionId)
+                requireThat(
+                  store.sameProject(b.actionId, d.projectId, 'action')
+                    .status === 'authorized',
+                  'action unavailable',
+                  403
+                )
+              return store.update(d.id, d.revision, {
+                links: b.links || [],
+                pendingActionId: b.actionId || null
+              })
+            })
+          )
         }
         if (
           (m = path.match(/^\/discussions\/([^/]+)\/workspace$/)) &&
@@ -197,35 +342,7 @@ export function createStudioServer({
         ) {
           const b = await readBody(req)
           return send(
-            store.write(path, b, () => {
-              const e = store.get(m[1]),
-                asset = store.sameProject(b.assetId, e.projectId, 'asset'),
-                run = store.sameProject(asset.runId, e.projectId, 'run')
-              requireThat(
-                run.targetEntityId === e.id && run.status === 'succeeded',
-                'asset target mismatch'
-              )
-              requireThat(
-                e.revision === b.expectedRevision,
-                'appearance conflict',
-                409
-              )
-              const decision = store.create(
-                e.projectId,
-                'appearance_selection',
-                {
-                  entityId: e.id,
-                  assetId: asset.id,
-                  actor: 'human',
-                  inputHash: run.inputHash
-                }
-              )
-              store.update(e.id, e.revision, {
-                appearanceAssetId: asset.id,
-                appearanceSelectionId: decision.id
-              })
-              return decision
-            })
+            store.write(path, b, () => workflows.confirmAppearance(m[1], b))
           )
         }
         if (
@@ -241,7 +358,11 @@ export function createStudioServer({
             'content-type': 'image/png',
             'cache-control': 'private,max-age=86400'
           })
-          res.end(await readFile(join(dataDir, a.path)))
+          res.end(
+            m[2] === 'thumbnail'
+              ? await thumbnail(dataDir, a)
+              : await readFile(join(dataDir, a.path))
+          )
           return
         }
         if (
@@ -264,12 +385,21 @@ export function createStudioServer({
             'running shared generation cannot be globally interrupted',
             409
           )
-          requireThat(
-            q.queue_pending.some((i) => i[1] === run.promptId),
-            'original queue item unavailable',
-            409
-          )
-          await execution.comfy('/queue', { delete: [run.promptId] })
+          if (q.queue_pending.some((i) => i[1] === run.promptId)) {
+            await execution.comfy('/queue', { delete: [run.promptId] })
+          } else {
+            const history = await execution.comfy(`/history/${run.promptId}`)
+            requireThat(
+              !history[run.promptId],
+              'original execution already has history',
+              409
+            )
+            requireThat(
+              ['queued', 'observing', 'cancelled'].includes(run.status),
+              'cannot cancel completed run',
+              409
+            )
+          }
           return send(execution.update(run.id, { status: 'cancelled' }))
         }
         if (path === '/health')
@@ -410,7 +540,7 @@ export function createStudioServer({
           return send(
             store.write(path, b, () =>
               m[2] === 'adopt'
-                ? adopt(store, m[1], b)
+                ? workflows.confirmCandidate(m[1], b)
                 : store.update(m[1], b.expectedRevision, { status: 'rejected' })
             )
           )
@@ -478,6 +608,8 @@ export function createStudioServer({
   })
   server.on('listening', () => execution.recover())
   server.on('close', () => {
+    clearInterval(workflowTimer)
+    workflows.stopped = true
     execution.stopped = true
     store.close()
   })
@@ -489,7 +621,7 @@ if (
 ) {
   const { server } = createStudioServer()
   server.listen(Number(process.env.STUDIO_PORT || 4318), '127.0.0.1', () =>
-    console.log(
+    process.stdout.write(
       'Sean Entity Studio http://127.0.0.1:' + (process.env.STUDIO_PORT || 4318)
     )
   )

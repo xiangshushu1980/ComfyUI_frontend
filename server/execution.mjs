@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { uuid, hash, requireThat } from './store.mjs'
-import { compileQwen, verifyWorkflow } from './qwen.mjs'
+import { compileQwen, verifyWorkflow, nativeSnapshot } from './qwen.mjs'
 const exec = promisify(execFile),
   sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const terminal = new Set([
@@ -28,7 +28,8 @@ export class Execution {
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(30000)
     })
-    const data = await response.json()
+    const raw = await response.text()
+    const data = raw ? JSON.parse(raw) : null
     requireThat(
       response.ok,
       'Comfy rejected: ' + JSON.stringify(data).slice(0, 500),
@@ -84,9 +85,14 @@ export class Execution {
     })
   }
   revokeTargetActions(entityId) {
-    for (const row of this.store.db.prepare("SELECT body FROM objects WHERE kind='action'").all()) {
+    for (const row of this.store.db
+      .prepare("SELECT body FROM objects WHERE kind='action'")
+      .all()) {
       const action = JSON.parse(row.body)
-      if (action.status === 'authorized' && this.store.get(action.inputId).targetEntityId === entityId)
+      if (
+        action.status === 'authorized' &&
+        this.store.get(action.inputId).targetEntityId === entityId
+      )
         this.store.update(action.id, action.revision, { status: 'revoked' })
     }
   }
@@ -203,6 +209,38 @@ export class Execution {
   }
   async resource(...args) {
     return (await exec('hive-resource', args, { timeout: 20000 })).stdout
+  }
+  prepareBusinessRun({
+    projectId,
+    targetEntityId,
+    workflowRunId,
+    sessionId,
+    input,
+    stage
+  }) {
+    const compiled = compileQwen(input)
+    const workflow = nativeSnapshot(compiled.graph)
+    return this.store.create(projectId, 'run', {
+      name: stage === 'threeview' ? 'Qwen · 三视图' : 'Qwen · 概念图',
+      targetEntityId,
+      workflowRunId,
+      sessionId,
+      stage,
+      inputSnapshot: { input },
+      inputHash: hash(input),
+      graph: compiled.graph,
+      workflow,
+      apiHash: compiled.apiHash,
+      uiHash: hash(workflow),
+      templateId: compiled.templateId,
+      status: 'prepared',
+      executionKey: uuid(),
+      clientId: 'sean-entity-' + uuid(),
+      promptId: null,
+      nodes: {},
+      outputs: [],
+      createdAt: new Date().toISOString()
+    })
   }
   async uploadReferences(run) {
     for (const ref of run.inputSnapshot.input.references) {
@@ -376,6 +414,19 @@ export class Execution {
             409
           )
           const q = await this.comfy('/queue')
+          const uncertain = this.store.db
+            .prepare("SELECT body FROM objects WHERE kind='run'")
+            .all()
+            .map((r) => JSON.parse(r.body))
+            .some(
+              (r) =>
+                r.id !== id &&
+                ['submitting', 'submission_unknown'].includes(r.status)
+            )
+          if (uncertain) {
+            await sleep(3000)
+            continue
+          }
           if (q.queue_running.length || q.queue_pending.length) {
             await sleep(3000)
             continue
@@ -433,6 +484,8 @@ export class Execution {
           'SaveImage UI binding missing'
         )
         save.widgets_values[0] = prefix
+        if (save.widgets_values_named)
+          save.widgets_values_named.filename_prefix = prefix
         run = this.update(id, {
           status: 'submitting',
           graph,
@@ -501,6 +554,7 @@ export class Execution {
       }
       while (!this.stopped) {
         run = this.store.get(id)
+        if (terminal.has(run.status)) break
         const history = await this.comfy(
             '/history/' + encodeURIComponent(run.promptId)
           ),
@@ -559,6 +613,11 @@ export class Execution {
       .all()) {
       const run = JSON.parse(row.body)
       if (run.promptId && !terminal.has(run.status))
+        void this.execute(run.id, true)
+      else if (
+        run.workflowRunId &&
+        ['prepared', 'waiting_resource', 'preparing'].includes(run.status)
+      )
         void this.execute(run.id, true)
       else if (['submitting', 'submission_unknown'].includes(run.status))
         void this.reconcile(run.id)

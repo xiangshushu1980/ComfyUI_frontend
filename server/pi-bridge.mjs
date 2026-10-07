@@ -77,33 +77,85 @@ export class PiBridge {
   }
   publicBinding(b) {
     const { capability, cwd, ...safe } = b
-    return { ...safe, workspace: cwd, piWebUrl: b.sessionId ? `${process.env.PI_WEB_PUBLIC_URL || this.url}/?session=${encodeURIComponent(b.sessionId)}` : null }
+    return {
+      ...safe,
+      workspace: cwd,
+      piWebUrl: b.sessionId
+        ? `${process.env.PI_WEB_PUBLIC_URL || this.url}/?session=${encodeURIComponent(b.sessionId)}`
+        : null
+    }
   }
   directInput(capability, body) {
     const binding = this.authenticate(capability, body.sessionId)
     const d = this.store.get(binding.discussionId)
     return this.store.transaction(() => {
-      requireThat(!this.store.list(d.projectId, 'pi_turn').some(t =>
-        ['prepared', 'sending', 'received', 'accepted', 'delivery_unknown'].includes(t.status)),
-      'project already has active or uncertain turn', 409)
-      const context = d.links || []
+      requireThat(
+        !this.store
+          .list(d.projectId, 'pi_turn')
+          .some(
+            (t) =>
+              t.discussionId === d.id &&
+              [
+                'prepared',
+                'sending',
+                'received',
+                'accepted',
+                'delivery_unknown'
+              ].includes(t.status)
+          ),
+        'session already has active or uncertain turn',
+        409
+      )
+      const workflow = this.store
+        .list(d.projectId, 'workflow_session')
+        .find((s) => s.discussionId === d.id)
+      const context = workflow
+        ? this.workflows.context(workflow.id).objects
+        : d.links || []
       for (const c of context)
-        requireThat(this.store.sameProject(c.id, d.projectId).revision === c.revision, 'context revision conflict', 409)
-      const action = d.pendingActionId ? this.store.get(d.pendingActionId) : null
+        requireThat(
+          this.store.sameProject(c.id, d.projectId).revision === c.revision,
+          'context revision conflict',
+          409
+        )
+      const action = d.pendingActionId
+        ? this.store.get(d.pendingActionId)
+        : null
       const turn = this.store.create(d.projectId, 'pi_turn', {
-        discussionId: d.id, text: body.text, context, contextHash: hash(context),
-        receipt: randomBytes(32).toString('hex'), actionId: action?.status === 'authorized' && action.expiresAt > Date.now() ? action.id : null,
-        status: 'received', origin: 'piweb'
+        discussionId: d.id,
+        text: body.text,
+        context,
+        contextHash: hash(context),
+        receipt: randomBytes(32).toString('hex'),
+        actionId:
+          action?.status === 'authorized' && action.expiresAt > Date.now()
+            ? action.id
+            : null,
+        status: 'received',
+        origin: 'piweb',
+        workflowSessionId: workflow?.id || null
       })
-      if (d.pendingActionId) this.store.update(d.id, d.revision, { pendingActionId: null })
+      if (d.pendingActionId)
+        this.store.update(d.id, d.revision, { pendingActionId: null })
       return turn
     })
   }
   directEnd(capability, body) {
     const binding = this.authenticate(capability, body.sessionId)
-    const turn = this.store.sameProject(body.turnId, binding.projectId, 'pi_turn')
-    requireThat(turn.receipt === body.receipt && turn.discussionId === binding.discussionId, 'invalid receipt', 403)
-    return this.store.transaction(() => this.store.update(turn.id, turn.revision, { status: 'finished' }))
+    const turn = this.store.sameProject(
+      body.turnId,
+      binding.projectId,
+      'pi_turn'
+    )
+    requireThat(
+      turn.receipt === body.receipt &&
+        turn.discussionId === binding.discussionId,
+      'invalid receipt',
+      403
+    )
+    return this.store.transaction(() =>
+      this.store.update(turn.id, turn.revision, { status: 'finished' })
+    )
   }
   async launch(discussionId, body) {
     let b = await this.prepareWorkspace(discussionId)
@@ -139,7 +191,7 @@ export class PiBridge {
         'Trust the exact workspace in PiWeb, then reload this native session; business tools are not verified',
         428
       )
-      return this.publicBinding(current)
+      return this.ensureNavigable(current)
     }
     requireThat(
       !['creating', 'creation_unknown'].includes(b.status),
@@ -182,7 +234,7 @@ export class PiBridge {
         'Native extension guard not verified',
         503
       )
-      return this.publicBinding(updated)
+      return this.ensureNavigable(updated)
     } catch (e) {
       const current = this.store.get(b.id)
       this.store.transaction(() =>
@@ -193,6 +245,30 @@ export class PiBridge {
       )
       throw e
     }
+  }
+  async ensureNavigable(binding) {
+    const catalog = await this.request('/api/sessions')
+    if (!catalog.sessions?.some((s) => s.id === binding.sessionId)) {
+      // Pi Web deliberately excludes idle transient sessions. A recorded,
+      // guarded initialization turn makes the exact session navigable.
+      await this.send(binding.discussionId, {
+        requestId: `initialize:${binding.sessionId}`,
+        text: '初始化当前业务 Workflow 会话：读取 context，简短说明当前目标及等待用户指示。此初始化不调用任何写操作、不生成、不采用、不确认。'
+      })
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const next = await this.request('/api/sessions')
+        if (next.sessions?.some((s) => s.id === binding.sessionId))
+          return this.publicBinding(this.store.get(binding.id))
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+      throw Object.assign(
+        new Error(
+          'Exact Pi Web session is not yet navigable; retry after initialization completes'
+        ),
+        { status: 503 }
+      )
+    }
+    return this.publicBinding(binding)
   }
   authenticate(capability, sessionId, discussionId) {
     const row = this.store.db
@@ -272,6 +348,56 @@ export class PiBridge {
       403
     )
     const args = body.args || {}
+    const workflowSession = this.store
+      .list(turn.projectId, 'workflow_session')
+      .find((s) => s.discussionId === turn.discussionId)
+    if (body.tool === 'workflow_operation') {
+      requireThat(workflowSession, 'enter a business Workflow first', 403)
+      return this.workflows.operate(
+        workflowSession.id,
+        args.operation,
+        args.parameters || {}
+      )
+    }
+    if (body.tool === 'read_chapter') {
+      const chapter = this.store.sameProject(args.id, turn.projectId, 'chapter')
+      const source = this.store.sameProject(
+        chapter.sourceId,
+        turn.projectId,
+        'source'
+      )
+      const offset = args.offset ?? 0
+      requireThat(
+        Number.isInteger(offset) &&
+          offset >= 0 &&
+          offset <= chapter.end - chapter.start,
+        'invalid chapter offset'
+      )
+      const end = Math.min(chapter.end, chapter.start + offset + 12000)
+      const result = {
+        chapter: {
+          id: chapter.id,
+          revision: chapter.revision,
+          name: chapter.name
+        },
+        sourceId: source.id,
+        sourceRevision: source.revision,
+        anchorIds: chapter.anchorIds,
+        offset,
+        nextOffset: end < chapter.end ? offset + 12000 : null,
+        text: source.text.slice(chapter.start + offset, end)
+      }
+      this.store.transaction(() =>
+        this.store.create(turn.projectId, 'read_audit', {
+          turnId: turn.id,
+          objectId: chapter.id,
+          revision: chapter.revision,
+          contentHash: hash(result),
+          tool: 'read_chapter'
+        })
+      )
+      return result
+    }
     if (body.tool === 'submit_action') {
       requireThat(
         turn.actionId === args.actionId,
@@ -284,8 +410,18 @@ export class PiBridge {
       return this.execution.preview(
         this.store.sameProject(args.inputId, turn.projectId, 'image_input').id
       )
-    if (body.tool === 'get_run')
-      return this.store.sameProject(args.runId, turn.projectId, 'run')
+    if (body.tool === 'get_run') {
+      const run = this.store.sameProject(args.runId, turn.projectId)
+      requireThat(['run', 'workflow_run'].includes(run.kind), 'Run required')
+      return run.kind === 'workflow_run'
+        ? {
+            ...run,
+            children: (run.childRunIds || []).map((id) =>
+              this.store.sameProject(id, turn.projectId, 'run')
+            )
+          }
+        : run
+    }
     if (body.tool === 'view_image') {
       const audits = this.store
         .list(turn.projectId, 'request_audit')
@@ -335,9 +471,38 @@ export class PiBridge {
     if (body.tool === 'catalog')
       return {
         tools: {
+          workflow_operation: {
+            operation:
+              'structure_novel | propose_entities | add_reference | generate_concepts | generate_threeview',
+            parameters: {
+              requestId: 'unique key',
+              chapterId: 'propose_entities: chapter UUID',
+              items:
+                'propose_entities: same exact entity/relation schemas as propose; chapter anchor sources REQUIRED',
+              type: 'add_reference: text|image',
+              text: 'reference text',
+              assetId: 'reference image asset UUID',
+              prompt:
+                'generate_concepts: optional direction; defaults from target entity and references',
+              count: '1..4 within human grant',
+              seed: 'optional integer, default 42',
+              steps: 'optional integer 1..50, default 25',
+              referenceIds:
+                'optional ordered image asset UUIDs; omitted uses entity reference resources',
+              sourceId: 'structure_novel: existing source UUID'
+            },
+            scope: workflowSession?.workflowId || 'enter Workflow first'
+          },
+          read_chapter: {
+            id: 'chapter UUID',
+            offset: 'optional text offset; page size 12000'
+          },
           submit_action: { actionId: 'current turn authorized action only' },
           preview: { inputId: 'UUID' },
-          get_run: { runId: 'UUID' },
+          get_run: {
+            runId:
+              'Workflow Run or child Run UUID; business result includes child states'
+          },
           view_image: { assetId: 'UUID; requires verified image model' },
           context: {},
           read_source: { id: 'sourceId', anchorId: 'P1' },
@@ -369,6 +534,9 @@ export class PiBridge {
       }
     if (body.tool === 'context')
       return {
+        workflow: workflowSession
+          ? this.workflows.context(workflowSession.id)
+          : null,
         goal: this.store.get(turn.discussionId).goal,
         context: turn.context,
         project: this.store.project(turn.projectId),
@@ -391,6 +559,10 @@ export class PiBridge {
         403
       )
       const obj = args.revision ? this.store.get(o.id, args.revision) : o
+      requireThat(
+        body.tool !== 'read_entity' || o.kind !== 'source',
+        'read novel via source anchors or read_chapter'
+      )
       let result = obj
       if (body.tool === 'read_source') {
         requireThat(o.kind === 'source', 'source required')
@@ -419,7 +591,7 @@ export class PiBridge {
         owner: 'Sean',
         name: 'qwen-concept',
         version: 1,
-        text: 'Use the fixed Qwen Image 2.1 concept template. Clearly distinguish global identity from scene-only state. Preserve reference order. Input changes must be previewed. A gray-to-white background change is a design instruction, not a source fact. One action permits one run. Never confirm a main appearance.'
+        text: 'Use the fixed Qwen Image 2.1 concept template. Clearly distinguish global identity from scene-only state. Preserve reference order. Business Workflow operations automatically bind immutable target/reference snapshots within the finite Workflow grant. Concepts may run in parallel and await formal appearance confirmation; the authorized fixed ThreeView then uses the selected appearance automatically. Legacy submit_action remains one-use. Never confirm a main appearance.'
       }
       this.store.transaction(() =>
         this.store.create(turn.projectId, 'read_audit', {
@@ -431,6 +603,12 @@ export class PiBridge {
       )
       return method
     }
+    if (body.tool === 'propose')
+      requireThat(
+        !workflowSession,
+        'use workflow_operation/propose_entities with chapterId',
+        403
+      )
     if (body.tool === 'propose')
       return this.store.write(
         'pi-propose:' + turn.id,

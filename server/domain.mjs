@@ -2,8 +2,10 @@
 import { hash, requireThat } from './store.mjs'
 export function createSource(store, projectId, body) {
   requireThat(
-    typeof body.text === 'string' && Buffer.byteLength(body.text) <= 102400,
-    'source must be <=100KB'
+    typeof body.text === 'string' &&
+      body.text.trim() &&
+      Buffer.byteLength(body.text) <= 10 * 1024 * 1024,
+    'source must be nonempty and <=10MB'
   )
   let offset = 0
   const anchors = body.text.split(/\n\s*\n/).map((text, i) => {
@@ -77,6 +79,8 @@ export function propose(store, projectId, body) {
     basis,
     discussionId: body.discussionId || null,
     status: 'pending',
+    workflowRunId: body.workflowRunId || null,
+    resolved: {},
     contentHash: hash({ items: body.items, basis })
   })
 }
@@ -102,7 +106,10 @@ export function adopt(store, id, body) {
     Array.isArray(body.selectedKeys) && body.selectedKeys.length,
     'select candidates'
   )
-  const selected = p.items.filter((i) => body.selectedKeys.includes(i.key))
+  const resolved = p.resolved || {}
+  const selected = p.items.filter(
+    (i) => body.selectedKeys.includes(i.key) && !resolved[i.key]
+  )
   requireThat(
     selected.length === body.selectedKeys.length,
     'unknown selected key'
@@ -114,7 +121,11 @@ export function adopt(store, id, body) {
       'legacy proposal schema invalid; ask PI for corrected candidates',
       409
     )
-  const map = {},
+  const map = Object.fromEntries(
+      Object.entries(resolved)
+        .filter(([, v]) => v.objectId)
+        .map(([k, v]) => [k, v.objectId])
+    ),
     adopted = []
   const endpoint = (key) =>
     map[key] || store.sameProject(key, p.projectId, 'entity').id
@@ -189,6 +200,15 @@ export function adopt(store, id, body) {
     actor: 'human',
     sources: selected.flatMap((i) => i.sources || [])
   })
-  store.update(id, p.revision, { status: 'adopted', decisionId: decision.id })
+  for (const item of selected)
+    resolved[item.key] = {
+      decisionId: decision.id,
+      objectId: map[item.key] || null
+    }
+  store.update(id, p.revision, {
+    status: p.items.every((i) => resolved[i.key]) ? 'adopted' : 'pending',
+    resolved,
+    decisionId: decision.id
+  })
   return { decision, adopted }
 }

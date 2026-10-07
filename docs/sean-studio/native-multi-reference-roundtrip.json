@@ -1,0 +1,641 @@
+{
+  "expected": {
+    "1": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    "2": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+        "type": "qwen_image",
+        "device": "default"
+      }
+    },
+    "3": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+      }
+    },
+    "4": {
+      "class_type": "QwenImage21Cache",
+      "inputs": {
+        "model": ["1", 0],
+        "device": "auto",
+        "dtype": "default"
+      }
+    },
+    "5": {
+      "class_type": "TextEncodeQwenImage21",
+      "inputs": {
+        "clip": ["2", 0],
+        "prompt": "A cinematic photorealistic character portrait, neutral gray background.",
+        "negative_prompt": "",
+        "resolution": 1024,
+        "vae": ["3", 0],
+        "images.image_1": ["10", 0],
+        "images.image_2": ["11", 0]
+      }
+    },
+    "6": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {
+        "width": 1536,
+        "height": 1024,
+        "batch_size": 1
+      }
+    },
+    "7": {
+      "class_type": "KSampler",
+      "inputs": {
+        "model": ["4", 0],
+        "positive": ["5", 0],
+        "negative": ["5", 1],
+        "latent_image": ["6", 0],
+        "seed": 42,
+        "steps": 25,
+        "cfg": 1,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "denoise": 1
+      }
+    },
+    "8": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": ["7", 0],
+        "vae": ["3", 0]
+      }
+    },
+    "9": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": ["8", 0],
+        "filename_prefix": "sean_entity_canvas_preview"
+      }
+    },
+    "10": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "sean_entity_canvas/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"
+      }
+    },
+    "11": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "sean_entity_canvas/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"
+      }
+    }
+  },
+  "actual": {
+    "workflow": {
+      "id": "35b7b13a-04da-492b-85e4-a454ee2765ce",
+      "revision": 0,
+      "last_node_id": 11,
+      "last_link_id": 12,
+      "nodes": [
+        {
+          "id": 1,
+          "type": "UNETLoader",
+          "pos": [390, 0],
+          "size": [270, 82],
+          "flags": {},
+          "order": 0,
+          "mode": 0,
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "MODEL",
+              "type": "MODEL",
+              "links": [1]
+            }
+          ],
+          "properties": {
+            "Node name for S&R": "UNETLoader"
+          },
+          "widgets_values": [
+            "qwen_image_2.1_int8_convrot.safetensors",
+            "default"
+          ],
+          "widgets_values_named": {
+            "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+            "weight_dtype": "default"
+          }
+        },
+        {
+          "id": 2,
+          "type": "CLIPLoader",
+          "pos": [780, 0],
+          "size": [270, 106],
+          "flags": {},
+          "order": 1,
+          "mode": 0,
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "CLIP",
+              "type": "CLIP",
+              "links": [2]
+            }
+          ],
+          "properties": {
+            "Node name for S&R": "CLIPLoader"
+          },
+          "widgets_values": [
+            "qwen3vl_8b_int8_convrot.safetensors",
+            "qwen_image",
+            "default"
+          ],
+          "widgets_values_named": {
+            "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+            "type": "qwen_image",
+            "device": "default"
+          }
+        },
+        {
+          "id": 3,
+          "type": "VAELoader",
+          "pos": [0, 0],
+          "size": [270, 58],
+          "flags": {},
+          "order": 2,
+          "mode": 0,
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "VAE",
+              "type": "VAE",
+              "links": [3, 11]
+            }
+          ],
+          "properties": {
+            "Node name for S&R": "VAELoader"
+          },
+          "widgets_values": ["qwen_image_2.1_vae_bf16.safetensors"],
+          "widgets_values_named": {
+            "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+          }
+        },
+        {
+          "id": 4,
+          "type": "QwenImage21Cache",
+          "pos": [390, 330],
+          "size": [270, 82],
+          "flags": {},
+          "order": 6,
+          "mode": 0,
+          "inputs": [
+            {
+              "name": "model",
+              "type": "MODEL",
+              "link": 1
+            }
+          ],
+          "outputs": [
+            {
+              "name": "MODEL",
+              "type": "MODEL",
+              "links": [6]
+            }
+          ],
+          "properties": {
+            "Node name for S&R": "QwenImage21Cache"
+          },
+          "widgets_values": ["auto", "default"],
+          "widgets_values_named": {
+            "device": "auto",
+            "dtype": "default"
+          }
+        },
+        {
+          "id": 5,
+          "type": "TextEncodeQwenImage21",
+          "pos": [780, 330],
+          "size": [400, 246],
+          "flags": {},
+          "order": 7,
+          "mode": 0,
+          "inputs": [
+            {
+              "name": "clip",
+              "type": "CLIP",
+              "link": 2
+            },
+            {
+              "name": "images.image_1",
+              "shape": 7,
+              "type": "IMAGE",
+              "link": 4
+            },
+            {
+              "name": "images.image_2",
+              "shape": 7,
+              "type": "IMAGE",
+              "link": 5
+            },
+            {
+              "name": "images.image_3",
+              "shape": 7,
+              "type": "IMAGE",
+              "link": null
+            },
+            {
+              "name": "vae",
+              "shape": 7,
+              "type": "VAE",
+              "link": 3
+            }
+          ],
+          "outputs": [
+            {
+              "name": "positive",
+              "type": "CONDITIONING",
+              "links": [7]
+            },
+            {
+              "name": "negative",
+              "type": "CONDITIONING",
+              "links": [8]
+            },
+            {
+              "name": "latent",
+              "type": "LATENT",
+              "links": []
+            }
+          ],
+          "properties": {
+            "Node name for S&R": "TextEncodeQwenImage21"
+          },
+          "widgets_values": [
+            "A cinematic photorealistic character portrait, neutral gray background.",
+            "",
+            1024
+          ],
+          "widgets_values_named": {
+            "prompt": "A cinematic photorealistic character portrait, neutral gray background.",
+            "negative_prompt": "",
+            "resolution": 1024
+          }
+        },
+        {
+          "id": 6,
+          "type": "EmptyLatentImage",
+          "pos": [0, 330],
+          "size": [270, 106],
+          "flags": {},
+          "order": 3,
+          "mode": 0,
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "LATENT",
+              "type": "LATENT",
+              "links": [9]
+            }
+          ],
+          "properties": {
+            "Node name for S&R": "EmptyLatentImage"
+          },
+          "widgets_values": [1536, 1024, 1],
+          "widgets_values_named": {
+            "width": 1536,
+            "height": 1024,
+            "batch_size": 1
+          }
+        },
+        {
+          "id": 7,
+          "type": "KSampler",
+          "pos": [390, 660],
+          "size": [270, 262],
+          "flags": {},
+          "order": 8,
+          "mode": 0,
+          "inputs": [
+            {
+              "name": "model",
+              "type": "MODEL",
+              "link": 6
+            },
+            {
+              "name": "positive",
+              "type": "CONDITIONING",
+              "link": 7
+            },
+            {
+              "name": "negative",
+              "type": "CONDITIONING",
+              "link": 8
+            },
+            {
+              "name": "latent_image",
+              "type": "LATENT",
+              "link": 9
+            }
+          ],
+          "outputs": [
+            {
+              "name": "LATENT",
+              "type": "LATENT",
+              "links": [10]
+            }
+          ],
+          "properties": {
+            "Node name for S&R": "KSampler"
+          },
+          "widgets_values": [42, "randomize", 25, 1, "euler", "simple", 1],
+          "widgets_values_named": {
+            "seed": 42,
+            "control_after_generate": "randomize",
+            "steps": 25,
+            "cfg": 1,
+            "sampler_name": "euler",
+            "scheduler": "simple",
+            "denoise": 1
+          }
+        },
+        {
+          "id": 8,
+          "type": "VAEDecode",
+          "pos": [780, 660],
+          "size": [140, 46],
+          "flags": {},
+          "order": 9,
+          "mode": 0,
+          "inputs": [
+            {
+              "name": "samples",
+              "type": "LATENT",
+              "link": 10
+            },
+            {
+              "name": "vae",
+              "type": "VAE",
+              "link": 11
+            }
+          ],
+          "outputs": [
+            {
+              "name": "IMAGE",
+              "type": "IMAGE",
+              "links": [12]
+            }
+          ],
+          "properties": {
+            "Node name for S&R": "VAEDecode"
+          }
+        },
+        {
+          "id": 9,
+          "type": "SaveImage",
+          "pos": [0, 660],
+          "size": [270, 58],
+          "flags": {},
+          "order": 10,
+          "mode": 0,
+          "inputs": [
+            {
+              "name": "images",
+              "type": "IMAGE",
+              "link": 12
+            }
+          ],
+          "outputs": [
+            {
+              "name": "images",
+              "type": "IMAGE",
+              "links": []
+            }
+          ],
+          "properties": {},
+          "widgets_values": ["sean_entity_canvas_preview"],
+          "widgets_values_named": {
+            "filename_prefix": "sean_entity_canvas_preview"
+          }
+        },
+        {
+          "id": 10,
+          "type": "LoadImage",
+          "pos": [1170, 0],
+          "size": [280, 102],
+          "flags": {},
+          "order": 4,
+          "mode": 0,
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "IMAGE",
+              "type": "IMAGE",
+              "links": [4]
+            },
+            {
+              "name": "MASK",
+              "type": "MASK",
+              "links": []
+            }
+          ],
+          "properties": {
+            "Node name for S&R": "LoadImage"
+          },
+          "widgets_values": [
+            "sean_entity_canvas/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+            "image"
+          ],
+          "widgets_values_named": {
+            "image": "sean_entity_canvas/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+            "upload": "image"
+          }
+        },
+        {
+          "id": 11,
+          "type": "LoadImage",
+          "pos": [1170, 220],
+          "size": [280, 102],
+          "flags": {},
+          "order": 5,
+          "mode": 0,
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "IMAGE",
+              "type": "IMAGE",
+              "links": [5]
+            },
+            {
+              "name": "MASK",
+              "type": "MASK",
+              "links": []
+            }
+          ],
+          "properties": {
+            "Node name for S&R": "LoadImage"
+          },
+          "widgets_values": [
+            "sean_entity_canvas/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png",
+            "image"
+          ],
+          "widgets_values_named": {
+            "image": "sean_entity_canvas/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png",
+            "upload": "image"
+          }
+        }
+      ],
+      "links": [
+        [1, 1, 0, 4, 0, "MODEL"],
+        [2, 2, 0, 5, 0, "CLIP"],
+        [3, 3, 0, 5, 4, "VAE"],
+        [4, 10, 0, 5, 1, "IMAGE"],
+        [5, 11, 0, 5, 2, "IMAGE"],
+        [6, 4, 0, 7, 0, "MODEL"],
+        [7, 5, 0, 7, 1, "CONDITIONING"],
+        [8, 5, 1, 7, 2, "CONDITIONING"],
+        [9, 6, 0, 7, 3, "LATENT"],
+        [10, 7, 0, 8, 0, "LATENT"],
+        [11, 3, 0, 8, 1, "VAE"],
+        [12, 8, 0, 9, 0, "IMAGE"]
+      ],
+      "groups": [],
+      "config": {},
+      "extra": {
+        "ds": {
+          "scale": 1,
+          "offset": [0, 0]
+        },
+        "owner": "Sean",
+        "representation": "compiled_from_native_template"
+      },
+      "version": 0.4
+    },
+    "output": {
+      "1": {
+        "inputs": {
+          "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+          "weight_dtype": "default"
+        },
+        "class_type": "UNETLoader",
+        "_meta": {
+          "title": "Load Diffusion Model"
+        }
+      },
+      "2": {
+        "inputs": {
+          "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+          "type": "qwen_image",
+          "device": "default"
+        },
+        "class_type": "CLIPLoader",
+        "_meta": {
+          "title": "Load CLIP"
+        }
+      },
+      "3": {
+        "inputs": {
+          "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+        },
+        "class_type": "VAELoader",
+        "_meta": {
+          "title": "Load VAE"
+        }
+      },
+      "4": {
+        "inputs": {
+          "device": "auto",
+          "dtype": "default",
+          "model": ["1", 0]
+        },
+        "class_type": "QwenImage21Cache",
+        "_meta": {
+          "title": "Qwen Image 2.1 Cache"
+        }
+      },
+      "5": {
+        "inputs": {
+          "prompt": "A cinematic photorealistic character portrait, neutral gray background.",
+          "negative_prompt": "",
+          "resolution": 1024,
+          "clip": ["2", 0],
+          "images.image_1": ["10", 0],
+          "images.image_2": ["11", 0],
+          "vae": ["3", 0]
+        },
+        "class_type": "TextEncodeQwenImage21",
+        "_meta": {
+          "title": "Text Encode Qwen Image 2.1"
+        }
+      },
+      "6": {
+        "inputs": {
+          "width": 1536,
+          "height": 1024,
+          "batch_size": 1
+        },
+        "class_type": "EmptyLatentImage",
+        "_meta": {
+          "title": "Empty Latent Image"
+        }
+      },
+      "7": {
+        "inputs": {
+          "seed": 42,
+          "steps": 25,
+          "cfg": 1,
+          "sampler_name": "euler",
+          "scheduler": "simple",
+          "denoise": 1,
+          "model": ["4", 0],
+          "positive": ["5", 0],
+          "negative": ["5", 1],
+          "latent_image": ["6", 0]
+        },
+        "class_type": "KSampler",
+        "_meta": {
+          "title": "KSampler"
+        }
+      },
+      "8": {
+        "inputs": {
+          "samples": ["7", 0],
+          "vae": ["3", 0]
+        },
+        "class_type": "VAEDecode",
+        "_meta": {
+          "title": "VAE Decode"
+        }
+      },
+      "9": {
+        "inputs": {
+          "filename_prefix": "sean_entity_canvas_preview",
+          "images": ["8", 0]
+        },
+        "class_type": "SaveImage",
+        "_meta": {
+          "title": "Save Image"
+        }
+      },
+      "10": {
+        "inputs": {
+          "image": "sean_entity_canvas/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png"
+        },
+        "class_type": "LoadImage",
+        "_meta": {
+          "title": "Load Image"
+        }
+      },
+      "11": {
+        "inputs": {
+          "image": "sean_entity_canvas/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"
+        },
+        "class_type": "LoadImage",
+        "_meta": {
+          "title": "Load Image"
+        }
+      }
+    }
+  },
+  "owner": "Sean",
+  "evidence": "Real registered frontend import/export with synthetic reference filenames; no generation or image-content validation"
+}

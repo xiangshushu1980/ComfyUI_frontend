@@ -95,6 +95,10 @@ export async function nativeGateway(req, res, url, store, comfyUrl) {
     const upstream = await fetch(comfyUrl + path, {
       signal: AbortSignal.timeout(15000)
     })
+    if (!upstream.ok) {
+      json({ error: 'Shared ComfyUI read failed', path, status: upstream.status }, upstream.status)
+      return true
+    }
     res.writeHead(upstream.status, {
       'content-type': upstream.headers.get('content-type') || 'application/json'
     })
@@ -119,7 +123,7 @@ export async function readText(req) {
     chunks = []
   for await (const c of req) {
     bytes += c.length
-    requireThat(bytes <= 1048576, 'request too large', 413)
+    requireThat(bytes <= 12 * 1024 * 1024, 'request too large', 413)
     chunks.push(c)
   }
   return Buffer.concat(chunks).toString('utf8')

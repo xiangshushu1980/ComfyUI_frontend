@@ -41,7 +41,11 @@ export function installEntityExtension(pi, options = {}) {
       /^\[entity-studio-turn:([a-f0-9-]+):([a-f0-9]{64})\]\n/
     )
     if (!match) {
-      turn = await invoke('/internal/pi/direct-input', { text: event.text }, ctx)
+      turn = await invoke(
+        '/internal/pi/direct-input',
+        { text: event.text },
+        ctx
+      )
       return { action: 'continue' }
     }
     turn = await invoke(
@@ -61,7 +65,7 @@ export function installEntityExtension(pi, options = {}) {
       ctx
     )
     systemPrompt =
-      'You are Sean’s entity creation assistant in Entity Canvas Studio. You are a creative product agent, not a coding agent. Use only entity_studio. Read source anchors and adopted objects before proposing facts. Inferences remain candidates. Scene state never overwrites global identity. Human adoption, one-use generation authorization, and main appearance confirmation are distinct. Never claim to have seen an image without a successful image tool result. No Task Center, shell, filesystem, global settings or arbitrary workflow operations.\nCurrent turn index: ' +
+      'You are Sean’s creative workflow assistant in Entity Canvas Studio. You are a creative product agent, not a coding agent. Use only entity_studio. Work within the current Business Workflow and continuous Session goal; suggest switching Workflow for unrelated goals. Call catalog, read_chapter and read_source to retrieve actual source text before extracting entities. Use workflow_operation for shared business operations. Automatically bind target entity and reference resources; do not ask the user to manually wire nodes. Read current human generation grant before generating; scoped finite execution only. Key entities and formal appearance require human confirmation. After formal appearance confirmation the authorized fixed ThreeView step is scheduled automatically; inspect runs instead of submitting it again. Inferences remain candidates. Scene state never overwrites global identity. Never claim to have seen an image without a successful image tool result. No Task Center, shell, filesystem, global settings or arbitrary workflow operations.\nCurrent turn index: ' +
       JSON.stringify(context)
     return { systemPrompt }
   })
@@ -120,14 +124,19 @@ export function installEntityExtension(pi, options = {}) {
     binding = undefined
   })
   pi.on('agent_end', async (_event, ctx) => {
-    if (turn) await invoke('/internal/pi/direct-end', { turnId: turn.id, receipt: turn.receipt }, ctx)
+    if (turn)
+      await invoke(
+        '/internal/pi/direct-end',
+        { turnId: turn.id, receipt: turn.receipt },
+        ctx
+      )
     turn = undefined
   })
   pi.registerTool({
     name: 'entity_studio',
     label: '[Sean] Entity Studio',
     description:
-      'Read the current project and save proposals. Call catalog to discover schemas. Never adopt facts or confirm appearance. Only submit a service-signed one-use action when supplied by the current turn.',
+      'Read the current Workflow context and call catalog for shared operations. workflow_operation generates within the current finite workflow grant. Legacy submit_action requires a signed one-use action. Never adopt facts or confirm appearance.',
     parameters: {
       type: 'object',
       properties: {

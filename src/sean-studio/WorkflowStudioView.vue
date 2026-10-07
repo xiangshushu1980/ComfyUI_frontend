@@ -128,14 +128,6 @@
       <label>长期数据</label
       ><button @click="clearFocus">◈ 全部章节、场景与实体</button
       ><button @click="importing = true">＋ 导入整本小说</button>
-      <button
-        v-for="chapter in chapters"
-        :key="chapter.id"
-        :class="{ chosen: focusId === chapter.id }"
-        @click="focusChapter(chapter)"
-      >
-        ▤ {{ chapter.name }}
-      </button>
       <label>实体</label
       ><button
         v-for="entity in entities"
@@ -496,13 +488,14 @@ async function openProject() {
     activeWorkflowId.value = ''
     workflowTargets.value = {}
     const view = await studioApi(
-      `/projects/${projectId.value}/views/master-v02`
+      `/projects/${projectId.value}/views/master-v02-tree`
     )
     viewRevision = view.revision
     await nextTick()
     projectGraph()
     canvas.ds.scale = view.scale || 0.75
-    canvas.ds.offset = view.offset || [60, 100]
+    canvas.ds.offset = view.offset || [60, 70]
+    canvas.setDirty(true, true)
     events = new EventSource(
       `/studio-api/v1/projects/${projectId.value}/events`
     )
@@ -882,35 +875,93 @@ async function loadExecution() {
   }
 }
 function fit() {
-  if (canvas && graph?.nodes.length) canvas.fitViewToSelectionAnimated()
+  if (!canvas || !graph?.nodes.length || !canvasHost.value) return
+  // Fit current business projection, independent of LiteGraph's stale selection.
+  const nodes = graph.nodes
+  const left = Math.min(...nodes.map((n) => n.pos[0]))
+  const top = Math.min(...nodes.map((n) => n.pos[1] - 32))
+  const right = Math.max(...nodes.map((n) => n.pos[0] + n.size[0]))
+  const bottom = Math.max(...nodes.map((n) => n.pos[1] + n.size[1]))
+  const width = Math.max(
+    200,
+    canvasHost.value.clientWidth - (selected.value ? 390 : 0)
+  )
+  const height = canvasHost.value.clientHeight
+  canvas.ds.scale = Math.min(
+    1,
+    (width - 60) / (right - left),
+    (height - 80) / (bottom - top)
+  )
+  canvas.ds.offset = [30 / canvas.ds.scale - left, 40 / canvas.ds.scale - top]
+  canvas.setDirty(true, true)
 }
 function projectGraph() {
   if (!graph) return
   graph.clear()
   const focus = objectById(focusId.value)
+  // Existing imports retain flat stable IDs; infer only their display hierarchy.
+  const chapterParents = new Map<string, string>()
+  const stacks = new Map<string, { id: string; level: number }[]>()
+  const orderedChapters = [...chapters.value].sort(
+    (a, b) => (a.order || 0) - (b.order || 0)
+  )
+  for (const chapter of orderedChapters) {
+    const heading = chapter.name || ''
+    const rawHeading = (objectById(chapter.sourceId)?.text || '')
+      .slice(chapter.start, chapter.end)
+      .split('\n')[0]
+    const markdown = /^(#{1,6})\s/.exec(rawHeading)
+    const level = markdown
+      ? markdown[1].length
+      : /^第[零〇一二三四五六七八九十百千万\d]+[卷部]/.test(heading)
+        ? 0
+        : /^第[零〇一二三四五六七八九十百千万\d]+节/.test(heading)
+          ? 2
+          : 1
+    const stack = stacks.get(chapter.sourceId) || []
+    while (stack.length && stack[stack.length - 1].level >= level) stack.pop()
+    chapterParents.set(
+      chapter.id,
+      chapter.parentId || stack.at(-1)?.id || chapter.sourceId
+    )
+    stack.push({ id: chapter.id, level })
+    stacks.set(chapter.sourceId, stack)
+  }
+  const inFocus = (id: string) => {
+    const seen = new Set<string>()
+    while (id && !seen.has(id)) {
+      if (id === focus?.id) return true
+      seen.add(id)
+      id = chapterParents.get(id) || ''
+    }
+    return false
+  }
   const mentioned = new Set(
     objects.value
       .filter(
         (o) =>
           o.kind === 'data_relation' &&
-          o.fromId === focus?.id &&
+          inFocus(o.fromId) &&
           o.type === 'mentions'
       )
       .map((o) => o.toId)
   )
   for (const e of entities.value)
     if (
-      (e.sources || []).some(
-        (s: { sourceId: string; anchorId: string }) =>
-          s.sourceId === focus?.sourceId &&
-          focus?.anchorIds?.includes(s.anchorId)
+      (e.sources || []).some((s: { sourceId: string; anchorId: string }) =>
+        orderedChapters.some(
+          (c) =>
+            inFocus(c.id) &&
+            s.sourceId === c.sourceId &&
+            c.anchorIds?.includes(s.anchorId)
+        )
       )
     )
       mentioned.add(e.id)
   const visible = objects.value.filter((o) => {
     if (o.kind === 'chapter')
-      return !o.supersededBy && (!focus || o.id === focus.id)
-    if (o.kind === 'scene') return !focus || o.chapterId === focus.id
+      return !o.supersededBy && (!focus || inFocus(o.id))
+    if (o.kind === 'scene') return !focus || inFocus(o.chapterId)
     if (o.kind === 'entity') return !focus || mentioned.has(o.id)
     if (o.kind === 'resource')
       return (
@@ -924,35 +975,61 @@ function projectGraph() {
         o.status === 'pending' &&
         (!focus || o.basis?.some((b: { id: string }) => b.id === focus.id))
       )
-    return (
-      o.kind === 'source' &&
-      !chapters.value.some((c) => c.sourceId === o.id) &&
-      !focus
-    )
+    return o.kind === 'source' && (!focus || o.id === focus.sourceId)
   })
-  const category = (o: Obj) =>
-    ['source', 'chapter', 'scene'].includes(o.kind)
-      ? 0
-      : o.kind === 'proposal'
-        ? 1
-        : o.kind === 'entity'
-          ? 2
-          : 3
-  const columns = [...new Set(visible.map(category))].sort()
-  const counters = [0, 0, 0, 0]
+  // Lay out a spanning forest; cross references remain edges, never duplicate nodes.
+  const byId = new Map(visible.map((o) => [o.id, o]))
+  const children = new Map<string, Obj[]>()
+  const roots: Obj[] = []
   for (const o of visible) {
-    const column = ['source', 'chapter', 'scene'].includes(o.kind)
-        ? 0
-        : o.kind === 'proposal'
-          ? 1
-          : o.kind === 'entity'
-            ? 2
-            : 3,
-      index = counters[column]++,
-      n = new LGraphNode(o.name || kindName(o.kind))
+    let parentId =
+      o.kind === 'chapter'
+        ? chapterParents.get(o.id)
+        : o.chapterId || o.entityId
+    if (o.kind === 'entity') {
+      parentId = objects.value.find(
+        (r) =>
+          r.kind === 'data_relation' &&
+          r.type === 'mentions' &&
+          r.toId === o.id &&
+          byId.has(r.fromId)
+      )?.fromId
+      parentId ||= visible.find(
+        (c) =>
+          c.kind === 'chapter' &&
+          (o.sources || []).some(
+            (s: { sourceId: string; anchorId: string }) =>
+              s.sourceId === c.sourceId && c.anchorIds?.includes(s.anchorId)
+          )
+      )?.id
+    }
+    if (parentId && parentId !== o.id && byId.has(parentId)) {
+      const siblings = children.get(parentId) || []
+      siblings.push(o)
+      children.set(parentId, siblings)
+    } else roots.push(o)
+  }
+  const positions = new Map<string, [number, number]>()
+  const visited = new Set<string>()
+  let row = 0
+  const place = (o: Obj, depth: number) => {
+    if (visited.has(o.id)) return
+    visited.add(o.id)
+    const start = row
+    for (const child of children.get(o.id) || []) place(child, depth + 1)
+    if (row === start) row += o.assetId ? 290 : 210
+    positions.set(o.id, [depth * 400, start])
+  }
+  for (const root of roots) place(root, 0)
+  for (const o of visible) place(o, 0)
+  for (const o of visible) {
+    const title = o.name || kindName(o.kind)
+    const n = new LGraphNode(
+      title.length > 18 ? title.slice(0, 17) + '…' : title
+    )
     n.id = toNodeId(o.id)
-    n.pos = [columns.indexOf(column) * 380, index * (column === 3 ? 270 : 190)]
-    n.size = [320, column === 3 ? 225 : 135]
+    n.pos = positions.get(o.id)!
+    n.size = [320, o.assetId ? 240 : 150]
     n.color =
       o.kind === 'entity'
         ? '#245853'
@@ -960,8 +1037,8 @@ function projectGraph() {
           ? '#665231'
           : '#2a3e52'
     n.bgcolor = '#152431'
-    n.addInput('关系', '*')
-    n.addOutput('关系', '*')
+    n.addInput('', '*')
+    n.addOutput('', '*')
     if (o.assetId) {
       let image = images.get(o.assetId)
       if (!image) {
@@ -976,7 +1053,7 @@ function projectGraph() {
           ctx.drawImage(
             image,
             12 + (296 - image.width * scale) / 2,
-            42,
+            58,
             image.width * scale,
             image.height * scale
           )
@@ -984,28 +1061,49 @@ function projectGraph() {
       }
     }
     n.onDrawForeground = (ctx) => {
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(10, 24, 300, n.size[1] - 24)
+      ctx.clip()
       ctx.fillStyle = '#9eb4c4'
       ctx.font = '12px system-ui'
       ctx.fillText(
         `${kindName(o.kind)} · ${o.role || kindName(o.type || '')}`,
         14,
-        27
+        40
       )
       if (!o.assetId) {
         ctx.fillStyle = '#d4e0e6'
         ctx.fillText(
           (o.description || o.brief || o.status || '点击查看').slice(0, 24),
           14,
-          67
+          76
         )
       }
+      ctx.restore()
     }
     graph.add(n)
   }
-  const edges = objects.value.filter((o) =>
-    ['data_relation', 'relation'].includes(o.kind)
+  const edges = objects.value.filter(
+    (o) =>
+      ['data_relation', 'relation'].includes(o.kind) &&
+      !(
+        o.type === 'contains' &&
+        chapterParents.has(o.toId) &&
+        o.fromId === byId.get(o.toId)?.sourceId
+      )
   )
   for (const o of visible) {
+    if (o.kind === 'chapter' && o.sourceId)
+      edges.push({
+        id: o.id + ':source',
+        kind: 'data_relation',
+        revision: 1,
+        fromId: byId.has(chapterParents.get(o.id) || '')
+          ? chapterParents.get(o.id)
+          : o.sourceId,
+        toId: o.id
+      })
     if (o.chapterId)
       edges.push({
         id: o.id + ':chapter',
@@ -1038,6 +1136,7 @@ function resize() {
   if (!canvasHost.value || !canvas) return
   const rect = canvasHost.value.getBoundingClientRect()
   canvas.resize(rect.width, rect.height)
+  canvas.setDirty(true, true)
 }
 function saveView() {
   clearTimeout(viewTimer)
@@ -1045,7 +1144,7 @@ function saveView() {
     if (!projectId.value) return
     try {
       const result = await studioApi(
-        `/projects/${projectId.value}/views/master-v02`,
+        `/projects/${projectId.value}/views/master-v02-tree`,
         {
           expectedRevision: viewRevision,
           requestId: requestId(),
@@ -1066,6 +1165,25 @@ onMounted(async () => {
   canvas = new LGraphCanvas(canvasElement.value!, graph)
   canvas.read_only = true
   canvas.show_info = false
+  canvas.min_font_size_for_lod = 0
+  canvas.background_image = ''
+  canvas.clear_background_color = '#101b25'
+  canvas.render_canvas_border = false
+  canvas.onDrawBackground = (ctx, area) => {
+    const step = canvas.ds.scale < 0.4 ? 110 : 22
+    ctx.fillStyle = '#2c3d4d'
+    for (
+      let x = Math.floor(area[0] / step) * step;
+      x < area[0] + area[2];
+      x += step
+    )
+      for (
+        let y = Math.floor(area[1] / step) * step;
+        y < area[1] + area[3];
+        y += step
+      )
+        ctx.fillRect(x, y, 1 / canvas.ds.scale, 1 / canvas.ds.scale)
+  }
   canvas.allow_dragnodes = false
   canvas.allow_searchbox = false
   canvas.onDrawForeground = (ctx) => {
@@ -1094,7 +1212,11 @@ onMounted(async () => {
   canvasElement.value!.addEventListener('click', (event) => {
     const [x, y] = canvas.convertEventToCanvasOffset(event)
     const node = graph.getNodeOnPos(x, y)
-    if (node) selectId(String(node.id))
+    if (node) {
+      const object = objectById(String(node.id))
+      if (object?.kind === 'chapter') focusChapter(object)
+      else selectId(String(node.id))
+    }
   })
   canvasElement.value!.addEventListener('pointerup', saveView)
   canvasElement.value!.addEventListener('wheel', saveView)
@@ -1261,12 +1383,12 @@ nav small {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  background: radial-gradient(#2c3d4d 1px, transparent 1px) 0 0/22px 22px;
+  background: #101b25;
 }
 .canvas-host > canvas {
   display: block;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 0;
 }
 .empty {
   position: absolute;

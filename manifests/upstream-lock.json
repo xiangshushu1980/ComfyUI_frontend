@@ -1,0 +1,19 @@
+{
+  "owner": "Sean",
+  "frontend": {
+    "repository": "https://github.com/Comfy-Org/ComfyUI_frontend",
+    "tag": "v1.52.7",
+    "commit": "1a7a6b82514874545dc5e8203d0bd2188c2d9b18",
+    "license": "GPL-3.0-only",
+    "node": "25.9.0",
+    "pnpm": "11.13.1"
+  },
+  "runtimeObserved": {
+    "date": "2026-10-07",
+    "comfyui": "0.37.0",
+    "frontend": "1.52.7",
+    "piwebPackage": "0.10.0",
+    "piSdk": "1.0.0",
+    "generationTested": false
+  }
+}

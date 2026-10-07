@@ -65,7 +65,8 @@ const router = createRouter({
         {
           path: '',
           name: 'GraphView',
-          component: () => import('@/views/GraphView.vue'),
+          // Owner: Sean. Dedicated studio surface; native graph is mounted once inside it.
+          component: () => import('@/sean-studio/StudioView.vue'),
           beforeEnter: async (_to, _from, next) => {
             // Then check user store
             const userStore = useUserStore()

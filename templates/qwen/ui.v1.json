@@ -1,0 +1,343 @@
+{
+  "owner": "Sean",
+  "templateId": "qwen-image-2.1.concept",
+  "version": 1,
+  "workflow": {
+    "id": "00000000-0000-0000-0000-000000000000",
+    "revision": 0,
+    "last_node_id": 9,
+    "last_link_id": 10,
+    "nodes": [
+      {
+        "id": 1,
+        "type": "UNETLoader",
+        "pos": [390, 0],
+        "size": [270, 82],
+        "flags": {},
+        "order": 0,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "MODEL",
+            "type": "MODEL",
+            "links": [1]
+          }
+        ],
+        "properties": {
+          "Node name for S&R": "UNETLoader"
+        },
+        "widgets_values": [
+          "qwen_image_2.1_int8_convrot.safetensors",
+          "default"
+        ],
+        "widgets_values_named": {
+          "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+          "weight_dtype": "default"
+        }
+      },
+      {
+        "id": 2,
+        "type": "CLIPLoader",
+        "pos": [780, 0],
+        "size": [270, 106],
+        "flags": {},
+        "order": 1,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "CLIP",
+            "type": "CLIP",
+            "links": [2]
+          }
+        ],
+        "properties": {
+          "Node name for S&R": "CLIPLoader"
+        },
+        "widgets_values": [
+          "qwen3vl_8b_int8_convrot.safetensors",
+          "qwen_image",
+          "default"
+        ],
+        "widgets_values_named": {
+          "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+          "type": "qwen_image",
+          "device": "default"
+        }
+      },
+      {
+        "id": 3,
+        "type": "VAELoader",
+        "pos": [0, 0],
+        "size": [270, 58],
+        "flags": {},
+        "order": 2,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "VAE",
+            "type": "VAE",
+            "links": [3, 9]
+          }
+        ],
+        "properties": {
+          "Node name for S&R": "VAELoader"
+        },
+        "widgets_values": ["qwen_image_2.1_vae_bf16.safetensors"],
+        "widgets_values_named": {
+          "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+        }
+      },
+      {
+        "id": 4,
+        "type": "QwenImage21Cache",
+        "pos": [390, 330],
+        "size": [270, 82],
+        "flags": {},
+        "order": 4,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "model",
+            "type": "MODEL",
+            "link": 1
+          }
+        ],
+        "outputs": [
+          {
+            "name": "MODEL",
+            "type": "MODEL",
+            "links": [4]
+          }
+        ],
+        "properties": {
+          "Node name for S&R": "QwenImage21Cache"
+        },
+        "widgets_values": ["auto", "default"],
+        "widgets_values_named": {
+          "device": "auto",
+          "dtype": "default"
+        }
+      },
+      {
+        "id": 5,
+        "type": "TextEncodeQwenImage21",
+        "pos": [780, 330],
+        "size": [400, 206],
+        "flags": {},
+        "order": 5,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "clip",
+            "type": "CLIP",
+            "link": 2
+          },
+          {
+            "name": "images.image_1",
+            "shape": 7,
+            "type": "IMAGE",
+            "link": null
+          },
+          {
+            "name": "vae",
+            "shape": 7,
+            "type": "VAE",
+            "link": 3
+          }
+        ],
+        "outputs": [
+          {
+            "name": "positive",
+            "type": "CONDITIONING",
+            "links": [5]
+          },
+          {
+            "name": "negative",
+            "type": "CONDITIONING",
+            "links": [6]
+          },
+          {
+            "name": "latent",
+            "type": "LATENT",
+            "links": null
+          }
+        ],
+        "properties": {
+          "Node name for S&R": "TextEncodeQwenImage21"
+        },
+        "widgets_values": [
+          "A cinematic photorealistic character portrait, neutral gray background.",
+          "",
+          1024
+        ],
+        "widgets_values_named": {
+          "prompt": "A cinematic photorealistic character portrait, neutral gray background.",
+          "negative_prompt": "",
+          "resolution": 1024
+        }
+      },
+      {
+        "id": 6,
+        "type": "EmptyLatentImage",
+        "pos": [0, 330],
+        "size": [270, 106],
+        "flags": {},
+        "order": 3,
+        "mode": 0,
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "LATENT",
+            "type": "LATENT",
+            "links": [7]
+          }
+        ],
+        "properties": {
+          "Node name for S&R": "EmptyLatentImage"
+        },
+        "widgets_values": [1536, 1024, 1],
+        "widgets_values_named": {
+          "width": 1536,
+          "height": 1024,
+          "batch_size": 1
+        }
+      },
+      {
+        "id": 7,
+        "type": "KSampler",
+        "pos": [390, 660],
+        "size": [270, 262],
+        "flags": {},
+        "order": 6,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "model",
+            "type": "MODEL",
+            "link": 4
+          },
+          {
+            "name": "positive",
+            "type": "CONDITIONING",
+            "link": 5
+          },
+          {
+            "name": "negative",
+            "type": "CONDITIONING",
+            "link": 6
+          },
+          {
+            "name": "latent_image",
+            "type": "LATENT",
+            "link": 7
+          }
+        ],
+        "outputs": [
+          {
+            "name": "LATENT",
+            "type": "LATENT",
+            "links": [8]
+          }
+        ],
+        "properties": {
+          "Node name for S&R": "KSampler"
+        },
+        "widgets_values": [42, "randomize", 25, 1, "euler", "simple", 1],
+        "widgets_values_named": {
+          "seed": 42,
+          "control_after_generate": "randomize",
+          "steps": 25,
+          "cfg": 1,
+          "sampler_name": "euler",
+          "scheduler": "simple",
+          "denoise": 1
+        }
+      },
+      {
+        "id": 8,
+        "type": "VAEDecode",
+        "pos": [780, 660],
+        "size": [140, 46],
+        "flags": {},
+        "order": 7,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "samples",
+            "type": "LATENT",
+            "link": 8
+          },
+          {
+            "name": "vae",
+            "type": "VAE",
+            "link": 9
+          }
+        ],
+        "outputs": [
+          {
+            "name": "IMAGE",
+            "type": "IMAGE",
+            "links": [10]
+          }
+        ],
+        "properties": {
+          "Node name for S&R": "VAEDecode"
+        }
+      },
+      {
+        "id": 9,
+        "type": "SaveImage",
+        "pos": [0, 660],
+        "size": [270, 58],
+        "flags": {},
+        "order": 8,
+        "mode": 0,
+        "inputs": [
+          {
+            "name": "images",
+            "type": "IMAGE",
+            "link": 10
+          }
+        ],
+        "outputs": [
+          {
+            "name": "images",
+            "type": "IMAGE",
+            "links": null
+          }
+        ],
+        "properties": {},
+        "widgets_values": ["sean_entity_canvas_preview"],
+        "widgets_values_named": {
+          "filename_prefix": "sean_entity_canvas_preview"
+        }
+      }
+    ],
+    "links": [
+      [1, 1, 0, 4, 0, "MODEL"],
+      [2, 2, 0, 5, 0, "CLIP"],
+      [3, 3, 0, 5, 2, "VAE"],
+      [4, 4, 0, 7, 0, "MODEL"],
+      [5, 5, 0, 7, 1, "CONDITIONING"],
+      [6, 5, 1, 7, 2, "CONDITIONING"],
+      [7, 6, 0, 7, 3, "LATENT"],
+      [8, 7, 0, 8, 0, "LATENT"],
+      [9, 3, 0, 8, 1, "VAE"],
+      [10, 8, 0, 9, 0, "IMAGE"]
+    ],
+    "groups": [],
+    "config": {},
+    "extra": {
+      "ds": {
+        "scale": 1,
+        "offset": [0, 0]
+      }
+    },
+    "version": 0.4
+  },
+  "uiHash": "032e1f6ce450550a427734851af491851be07a6c1488d1c63d326b848a1a613a",
+  "apiHash": "c5c5d76d8b8888f5cb4345588081773dd59f805953460877a6574462acef476f"
+}

@@ -1,0 +1,25 @@
+{
+  "owner": "Sean",
+  "templateId": "qwen-image-2.1.concept",
+  "version": 1,
+  "source": "comfy-ops/reference-workspace/catalog/qwen-concept.v1.json",
+  "bindings": {
+    "effectivePrompt": "5.prompt",
+    "width": "6.width",
+    "height": "6.height",
+    "seed": "7.seed",
+    "steps": "7.steps",
+    "systemOutputPrefix": "9.filename_prefix"
+  },
+  "references": {
+    "nodeIds": "10..25",
+    "slotNames": "5.images.image_1..16",
+    "order": "explicit input asset order"
+  },
+  "normalization": {
+    "ignoreApiKeys": ["_meta"],
+    "compare": "all node types and inputs",
+    "unknownExecutionNodes": "reject"
+  },
+  "runUiBindings": { "9.widgets_values[0]": "systemOutputPrefix" }
+}

@@ -1,0 +1,58 @@
+{
+  "owner": "Sean",
+  "observedAt": "2026-10-07",
+  "nodes": [
+    {
+      "name": "UNETLoader",
+      "module": "nodes",
+      "definitionHash": "8f710378a3604a6033533cd4abac3b5fd1934d5f5e9a645236ec8582591dd966"
+    },
+    {
+      "name": "CLIPLoader",
+      "module": "nodes",
+      "definitionHash": "b2df5fb02fbd30631fda5ed5014c92a436705aae5a9492051bf449326e1ceee9"
+    },
+    {
+      "name": "VAELoader",
+      "module": "nodes",
+      "definitionHash": "d4cd32d8a13d9f5061f087dbadc440549ccbe5a9349d08c54c7f088745c50cf2"
+    },
+    {
+      "name": "QwenImage21Cache",
+      "module": "comfy_extras.nodes_qwen",
+      "definitionHash": "487278c07a77caba567ea1526f94e094aa7f0d8c33885569a8a276f76942ea41"
+    },
+    {
+      "name": "TextEncodeQwenImage21",
+      "module": "comfy_extras.nodes_qwen",
+      "definitionHash": "1a87e0b9a65488758f03ced415046856842799d11d3639bd9f18d673314e45d8"
+    },
+    {
+      "name": "EmptyLatentImage",
+      "module": "nodes",
+      "definitionHash": "7c0988bf4ed95171dc7b981b3dd21bb98b6dd109e7ef31c6c8f581dd49e547ac"
+    },
+    {
+      "name": "KSampler",
+      "module": "nodes",
+      "definitionHash": "1ae668b3199704b03dd9e28c0db39d8e03b672e2a6593243aa0cdf99fe1a1efd"
+    },
+    {
+      "name": "VAEDecode",
+      "module": "nodes",
+      "definitionHash": "2e76830e4677f79117b007e23f6fe64cd592987d1a1b75642359477739b098a1"
+    },
+    {
+      "name": "SaveImage",
+      "module": "nodes",
+      "definitionHash": "ce0a0de0e8831c16b1e84649f02ee21aa004d18d68482897de63e62ebb33fc9b"
+    },
+    {
+      "name": "LoadImage",
+      "module": "nodes",
+      "definitionHash": "a81f7416aca8552872ad8a73c6395f6f5d1f66943f92279a0b1412d3f3cb34c8"
+    }
+  ],
+  "thirdPartyExtensions": [],
+  "referenceSlotContract": "TextEncodeQwenImage21 COMFY_AUTOGROW_V3 images.image_1..16; construct via native node definitions"
+}

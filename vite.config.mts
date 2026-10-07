@@ -264,92 +264,116 @@ export default defineConfig({
         '**/test-results/**'
       ]
     },
-    proxy: {
-      '/internal': {
-        target: DEV_SERVER_COMFYUI_URL,
-        ...cloudProxyConfig
-      },
-
-      ...(DISTRIBUTION === 'cloud'
-        ? {
-            '/api/view': gcsRedirectProxyConfig,
-            '/api/viewvideo': gcsRedirectProxyConfig
-          }
-        : {}),
-
-      '/api': {
-        target: DEV_SERVER_COMFYUI_URL,
-        ...cloudProxyConfig,
-        bypass: (req, res, _options) => {
-          if (!res) return null
-
-          // Return empty array for extensions API as these modules
-          // are not on vite's dev server.
-          if (req.url === '/api/extensions') {
-            res.end(JSON.stringify([]))
-            return false
-          }
-
-          // Bypass multi-user auth check from staging (cloud only)
-          if (DISTRIBUTION === 'cloud' && req.url === '/api/users') {
-            res.setHeader('Content-Type', 'application/json')
-            res.end(JSON.stringify({})) // Return empty object to simulate single-user mode
-            return false
-          }
-
-          return null
-        }
-      },
-
-      '/oauth': {
-        target: DEV_SERVER_COMFYUI_URL,
-        ...cloudProxyConfig,
-        bypass: (req) => {
-          const path = (req.url ?? '').split('?')[0]
-          if (path === '/oauth/consent' || path.startsWith('/oauth/consent/')) {
-            return req.url
-          }
-          return null
-        }
-      },
-
-      '/ws': {
-        target: DEV_SERVER_COMFYUI_URL,
-        ws: true,
-        ...cloudProxyConfig
-      },
-
-      '/workflow_templates': {
-        target: DEV_SERVER_COMFYUI_URL,
-        ...cloudProxyConfig
-      },
-
-      '/extensions': {
-        target: DEV_SERVER_COMFYUI_URL,
-        changeOrigin: true,
-        ...cloudProxyConfig
-      },
-
-      '/docs': {
-        target: DEV_SERVER_COMFYUI_URL,
-        changeOrigin: true,
-        ...cloudProxyConfig
-      },
-
-      ...(!DISABLE_TEMPLATES_PROXY
-        ? {
-            '/templates': {
+    // Owner: Sean. Studio development uses the same deny-by-default gateway.
+    proxy:
+      process.env.SEAN_STUDIO === '1'
+        ? Object.fromEntries(
+            [
+              '/studio-api',
+              '/api',
+              '/internal',
+              '/ws',
+              '/extensions',
+              '/prompt',
+              '/queue',
+              '/history',
+              '/view',
+              '/upload',
+              '/user.css'
+            ].map((path) => [
+              path,
+              { target: 'http://127.0.0.1:4318', ws: path === '/ws' }
+            ])
+          )
+        : {
+            '/internal': {
               target: DEV_SERVER_COMFYUI_URL,
               ...cloudProxyConfig
+            },
+
+            ...(DISTRIBUTION === 'cloud'
+              ? {
+                  '/api/view': gcsRedirectProxyConfig,
+                  '/api/viewvideo': gcsRedirectProxyConfig
+                }
+              : {}),
+
+            '/api': {
+              target: DEV_SERVER_COMFYUI_URL,
+              ...cloudProxyConfig,
+              bypass: (req, res, _options) => {
+                if (!res) return null
+
+                // Return empty array for extensions API as these modules
+                // are not on vite's dev server.
+                if (req.url === '/api/extensions') {
+                  res.end(JSON.stringify([]))
+                  return false
+                }
+
+                // Bypass multi-user auth check from staging (cloud only)
+                if (DISTRIBUTION === 'cloud' && req.url === '/api/users') {
+                  res.setHeader('Content-Type', 'application/json')
+                  res.end(JSON.stringify({})) // Return empty object to simulate single-user mode
+                  return false
+                }
+
+                return null
+              }
+            },
+
+            '/oauth': {
+              target: DEV_SERVER_COMFYUI_URL,
+              ...cloudProxyConfig,
+              bypass: (req) => {
+                const path = (req.url ?? '').split('?')[0]
+                if (
+                  path === '/oauth/consent' ||
+                  path.startsWith('/oauth/consent/')
+                ) {
+                  return req.url
+                }
+                return null
+              }
+            },
+
+            '/ws': {
+              target: DEV_SERVER_COMFYUI_URL,
+              ws: true,
+              ...cloudProxyConfig
+            },
+
+            '/workflow_templates': {
+              target: DEV_SERVER_COMFYUI_URL,
+              ...cloudProxyConfig
+            },
+
+            '/extensions': {
+              target: DEV_SERVER_COMFYUI_URL,
+              changeOrigin: true,
+              ...cloudProxyConfig
+            },
+
+            '/docs': {
+              target: DEV_SERVER_COMFYUI_URL,
+              changeOrigin: true,
+              ...cloudProxyConfig
+            },
+
+            ...(!DISABLE_TEMPLATES_PROXY
+              ? {
+                  '/templates': {
+                    target: DEV_SERVER_COMFYUI_URL,
+                    ...cloudProxyConfig
+                  }
+                }
+              : {}),
+
+            '/testsubrouteindex': {
+              target: 'http://localhost:5173',
+              rewrite: (path) => path.substring('/testsubrouteindex'.length)
             }
           }
-        : {}),
-
-      '/testsubrouteindex': {
-        target: 'http://localhost:5173',
-        rewrite: (path) => path.substring('/testsubrouteindex'.length)
-      }
-    }
   },
 
   plugins: [

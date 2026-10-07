@@ -199,3 +199,36 @@ test('legacy chapter identity survives migration and rerunning migration is harm
   assert.equal(store.get(old.id).revision, revision)
   f.close()
 })
+test('four Workflow entries keep distinct scoped discussions and resume only the same target', () => {
+  const f = fixture(),
+    { store, workflows: w, project: p } = f
+  const entity = store.transaction(() =>
+    store.create(p.id, 'entity', { name: '测试目标', type: 'character' })
+  )
+  const opened = [
+    'StructureNovel',
+    'ExtractEntities',
+    'CreateEntity',
+    'GenerateThreeView'
+  ].map((workflowId) =>
+    store.transaction(() => w.open(p.id, { workflowId, targetId: entity.id }))
+  )
+  assert.equal(new Set(opened.map((s) => s.discussionId)).size, 4)
+  for (const s of opened)
+    assert.equal(
+      store.transaction(() =>
+        w.open(p.id, { workflowId: s.workflowId, targetId: entity.id })
+      ).id,
+      s.id
+    )
+  const other = store.transaction(() =>
+    store.create(p.id, 'entity', { name: '其他目标', type: 'character' })
+  )
+  assert.notEqual(
+    store.transaction(() =>
+      w.open(p.id, { workflowId: 'CreateEntity', targetId: other.id })
+    ).discussionId,
+    opened[2].discussionId
+  )
+  f.close()
+})

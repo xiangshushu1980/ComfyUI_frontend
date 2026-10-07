@@ -80,6 +80,7 @@ export class PiBridge {
     return {
       ...safe,
       workspace: cwd,
+      piWebWorkspaceUrl: `${process.env.PI_WEB_PUBLIC_URL || this.url}/?cwd=${encodeURIComponent(cwd)}`,
       piWebUrl: b.sessionId
         ? `${process.env.PI_WEB_PUBLIC_URL || this.url}/?session=${encodeURIComponent(b.sessionId)}`
         : null

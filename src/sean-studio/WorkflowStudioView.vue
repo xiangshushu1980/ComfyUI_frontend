@@ -10,21 +10,121 @@
     </header>
     <aside class="library">
       <label>影片工程</label
-      ><select v-model="projectId" @change="openProject">
+      ><select
+        v-model="projectId"
+        :disabled="navigationBusy"
+        @change="openProject"
+      >
         <option value="">选择工程</option>
         <option v-for="p in projects" :key="p.id" :value="p.id">
           {{ p.name }}
         </option></select
       ><button @click="newProject">＋ 新建工程</button>
-      <label>业务 Workflow</label
-      ><button
+      <label>业务 Workflow</label>
+      <section
         v-for="d in definitions"
         :key="d.id"
-        class="workflow-entry"
-        @click="enterWorkflow(d.id)"
+        :class="['workflow-item', { chosen: activeWorkflowId === d.id }]"
       >
-        ◇ {{ d.name }}<small>进入 / 继续 PiWeb ↗</small>
-      </button>
+        <button
+          class="workflow-entry"
+          :aria-expanded="activeWorkflowId === d.id"
+          :disabled="navigationBusy"
+          @click="selectWorkflow(d.id)"
+        >
+          <strong>◇ {{ d.name }}</strong>
+          <small>{{ workflowStatus(d.id) }}</small>
+        </button>
+        <button
+          class="workflow-continue"
+          :disabled="
+            navigationBusy ||
+            !projectId ||
+            (d.target === 'entity' && !workflowTarget(d.id))
+          "
+          @click="enterWorkflow(d.id)"
+        >
+          {{
+            navigationBusy && activeWorkflowId === d.id
+              ? '正在打开…'
+              : '继续 PiWeb ↗'
+          }}
+        </button>
+        <div v-if="activeWorkflowId === d.id" class="workflow-details">
+          <div class="agent-title">
+            π <strong>Workflow Agent</strong
+            ><span :class="{ working: agentStatus.working }">{{
+              agentStatus.working
+                ? '正在工作'
+                : statusName(currentSession?.status)
+            }}</span>
+          </div>
+          <label v-if="d.target === 'entity'"
+            >目标实体
+            <select
+              :value="workflowTarget(d.id)"
+              :disabled="navigationBusy"
+              @change="changeWorkflowTarget(d.id, $event)"
+            >
+              <option value="">选择目标实体</option>
+              <option
+                v-for="entity in entities"
+                :key="entity.id"
+                :value="entity.id"
+              >
+                {{ entity.name }}
+              </option>
+            </select>
+          </label>
+          <p v-if="d.target === 'entity' && !workflowTarget(d.id)" class="hint">
+            先选择目标实体，再继续对应 PiWeb 会话。
+          </p>
+          <p>{{ currentSession?.goal || '从左侧业务 Workflow 进入。' }}</p>
+          <p v-if="currentSession" class="session-identity">
+            会话 {{ currentSession.id.slice(0, 8) }} ·
+            {{ objectById(currentSession.targetId)?.name || '工程' }}
+          </p>
+          <pre class="agent-summary">{{
+            agentStatus.summary.slice(-360) || '暂无输出'
+          }}</pre>
+          <template
+            v-if="
+              currentSession &&
+              ['CreateEntity', 'GenerateThreeView'].includes(
+                currentSession.workflowId
+              )
+            "
+            ><h3>本次流程授权</h3>
+            <label v-if="currentSession.workflowId === 'CreateEntity'"
+              >概念候选数<select v-model.number="conceptCount">
+                <option v-for="n in [0, 1, 2, 3, 4]" :key="n" :value="n">
+                  {{ n }}
+                </option>
+              </select></label
+            ><label class="toggle"
+              ><input v-model="allowThreeView" type="checkbox" />{{
+                currentSession.workflowId === 'CreateEntity'
+                  ? '确认形象后自动生成三视图'
+                  : '授权生成三视图'
+              }}</label
+            ><button @click="authorizeWorkflow">授权有限流程</button>
+            <p class="hint">
+              Agent 自动绑定输入。正式形象仍由你确认。
+            </p></template
+          >
+          <p v-if="agentError" class="error">{{ agentError }}</p>
+          <p v-if="workspaceToTrust" class="hint">
+            此 Workflow 的精确工作区尚需信任：<br />{{ workspaceToTrust }}
+          </p>
+          <a
+            v-if="workspaceUrl"
+            :href="workspaceUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            >前往 PiWeb 工作区设置 ↗</a
+          >
+        </div>
+      </section>
       <label>长期数据</label
       ><button @click="clearFocus">◈ 全部章节、场景与实体</button
       ><button @click="importing = true">＋ 导入整本小说</button>
@@ -219,53 +319,6 @@
         >
       </section>
     </main>
-    <aside class="agent-card">
-      <div class="agent-title">
-        π <strong>Workflow Agent</strong
-        ><span :class="{ working: agentStatus.working }">{{
-          agentStatus.working ? '正在工作' : statusName(currentSession?.status)
-        }}</span>
-      </div>
-      <select v-model="sessionId" @change="selectSession">
-        <option value="">选择业务会话</option>
-        <option v-for="s in sessions" :key="s.id" :value="s.id">
-          {{ s.name }} · {{ objectById(s.targetId)?.name || '工程' }}
-        </option>
-      </select>
-      <p>{{ currentSession?.goal || '从左侧业务 Workflow 进入。' }}</p>
-      <button :disabled="!currentSession" class="primary" @click="openPiWeb">
-        打开对应 PiWeb ↗
-      </button>
-      <pre class="agent-summary">{{
-        agentStatus.summary.slice(-360) || '暂无输出'
-      }}</pre>
-      <template
-        v-if="
-          currentSession &&
-          ['CreateEntity', 'GenerateThreeView'].includes(
-            currentSession.workflowId
-          )
-        "
-        ><h3>本次流程授权</h3>
-        <label
-          >概念候选数<select v-model.number="conceptCount">
-            <option v-for="n in [0, 1, 2, 3, 4]" :key="n" :value="n">
-              {{ n }}
-            </option>
-          </select></label
-        ><label class="toggle"
-          ><input
-            v-model="allowThreeView"
-            type="checkbox"
-          />确认形象后自动生成三视图</label
-        ><button @click="authorizeWorkflow">授权有限流程</button>
-        <p class="hint">Agent 自动绑定输入。正式形象仍由你确认。</p></template
-      >
-      <p v-if="agentError" class="error">{{ agentError }}</p>
-      <p v-if="workspaceToTrust" class="hint">
-        需在 PiWeb 信任此精确工作区：<br />{{ workspaceToTrust }}
-      </p>
-    </aside>
     <div v-if="importing" class="modal">
       <form @submit.prevent="importNovel">
         <h2>导入整本小说</h2>
@@ -326,8 +379,21 @@ const definitions = ref<Obj[]>([]),
   focusId = ref(''),
   showAllResources = ref(false),
   showHistory = ref(false)
-const agentStatus = ref({ working: false, summary: '', piWebUrl: '' }),
-  agentError = ref(''),
+type AgentStatus = { working: boolean; summary: string; piWebUrl: string }
+const agentStates = ref<Record<string, AgentStatus>>({})
+const agentStatus = computed(
+  () =>
+    agentStates.value[sessionId.value] || {
+      working: false,
+      summary: '',
+      piWebUrl: ''
+    }
+)
+const activeWorkflowId = ref(''),
+  workflowTargets = ref<Record<string, string>>({}),
+  navigationBusy = ref(false),
+  workspaceUrl = ref('')
+const agentError = ref(''),
   workspaceToTrust = ref(''),
   error = ref('')
 const importing = ref(false),
@@ -422,12 +488,13 @@ async function openProject() {
   focusId.value = ''
   sessionId.value = ''
   expandedEntities.clear()
-  agentStatus.value = { working: false, summary: '', piWebUrl: '' }
+  agentStates.value = {}
   if (!projectId.value) return
   localStorage.setItem('sean-studio-project', projectId.value)
   try {
     await refresh()
-    sessionId.value = sessions.value.at(-1)?.id || ''
+    activeWorkflowId.value = ''
+    workflowTargets.value = {}
     const view = await studioApi(
       `/projects/${projectId.value}/views/master-v02`
     )
@@ -525,77 +592,188 @@ async function structureSource(source: Obj) {
     showError(e)
   }
 }
-async function enterWorkflow(workflowId: string, entityId?: string) {
-  try {
-    if (!projectId.value) throw new Error('请先选择工程')
-    const definition = definitions.value.find((d) => d.id === workflowId)!
-    const targetId =
-      entityId || (selected.value?.kind === 'entity' ? selected.value.id : null)
-    if (definition.target === 'entity' && !targetId)
-      throw new Error('请先选择目标实体')
-    const session = await studioApi(
-      `/projects/${projectId.value}/workflow-sessions`,
-      { workflowId, targetId, requestId: requestId() }
-    )
-    sessionId.value = session.id
-    await refresh()
-    await openPiWeb()
-  } catch (e) {
-    showError(e)
-  }
+function workflowTarget(workflowId: string): string {
+  const definition = definitions.value.find((d) => d.id === workflowId)
+  if (definition?.target !== 'entity') return projectId.value
+  if (Object.hasOwn(workflowTargets.value, workflowId))
+    return workflowTargets.value[workflowId]
+  if (selected.value?.kind === 'entity') return selected.value.id
+  if (selected.value?.kind === 'resource') return selected.value.entityId
+  return (
+    sessions.value.findLast((s) => s.workflowId === workflowId)?.targetId ||
+    (entities.value.length === 1 ? entities.value[0].id : '')
+  )
 }
-async function selectSession() {
-  agentStatus.value = { working: false, summary: '', piWebUrl: '' }
+function workflowSession(workflowId: string) {
+  return sessions.value.findLast(
+    (s) =>
+      s.workflowId === workflowId &&
+      s.targetId === workflowTarget(workflowId) &&
+      !s.closed
+  )
+}
+function workflowStatus(workflowId: string) {
+  const session = workflowSession(workflowId)
+  const binding =
+    session &&
+    objects.value.find(
+      (b) => b.kind === 'pi_binding' && b.discussionId === session.discussionId
+    )
+  if (binding?.status === 'guard_unverified') return '工作区待信任 / 加载'
+  if (session)
+    return agentStates.value[session.id]?.working
+      ? '正在工作'
+      : statusName(session.status)
+  return definitions.value.find((d) => d.id === workflowId)?.target ===
+    'entity' && !workflowTarget(workflowId)
+    ? '待选择实体'
+    : '未开始'
+}
+async function prepareWorkflow(workflowId: string) {
+  if (!projectId.value) throw new Error('请先选择工程')
+  const definition = definitions.value.find((d) => d.id === workflowId)!
+  const targetId = workflowTarget(workflowId)
+  if (definition.target === 'entity' && !targetId)
+    throw new Error('请先选择目标实体')
+  if (definition.target === 'entity')
+    workflowTargets.value[workflowId] = targetId
+  return (await studioApi(`/projects/${projectId.value}/workflow-sessions`, {
+    workflowId,
+    targetId,
+    requestId: requestId()
+  })) as Obj
+}
+async function selectWorkflow(workflowId: string) {
+  activeWorkflowId.value = workflowId
+  sessionId.value = workflowSession(workflowId)?.id || ''
   agentError.value = ''
   workspaceToTrust.value = ''
-  await refreshAgent()
+  workspaceUrl.value = ''
+  if (!projectId.value || !workflowTarget(workflowId)) return
+  const project = projectId.value
+  try {
+    const session = await prepareWorkflow(workflowId)
+    await refresh()
+    if (projectId.value === project && activeWorkflowId.value === workflowId)
+      sessionId.value = session.id
+    await refreshAgent()
+  } catch (e) {
+    if (activeWorkflowId.value === workflowId)
+      agentError.value = String(e instanceof Error ? e.message : e)
+  }
+}
+async function changeWorkflowTarget(workflowId: string, event: Event) {
+  workflowTargets.value[workflowId] = (event.target as HTMLSelectElement).value
+  await selectWorkflow(workflowId)
+}
+async function enterWorkflow(workflowId: string, entityId?: string) {
+  if (navigationBusy.value) return
+  if (entityId) workflowTargets.value[workflowId] = entityId
+  activeWorkflowId.value = workflowId
+  agentError.value = ''
+  workspaceToTrust.value = ''
+  workspaceUrl.value = ''
+  if (!projectId.value || !workflowTarget(workflowId)) {
+    agentError.value = '请先选择工程及目标实体'
+    return
+  }
+  // Reserve the tab inside the user gesture, before any asynchronous operation.
+  const tab = window.open('about:blank', '_blank')
+  navigationBusy.value = true
+  try {
+    const session = await prepareWorkflow(workflowId)
+    await refresh()
+    sessionId.value = session.id
+    await navigatePiWeb(session, tab)
+  } catch (e) {
+    tab?.close()
+    agentError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    navigationBusy.value = false
+  }
 }
 function expandSelectedEntity() {
   if (selected.value) expandedEntities.add(selected.value.id)
   projectGraph()
 }
 async function openPiWeb() {
-  const s = currentSession.value
-  if (!s) return
+  const session = currentSession.value
+  if (!session || navigationBusy.value) return
+  activeWorkflowId.value = session.workflowId
+  workflowTargets.value[session.workflowId] = session.targetId
   const tab = window.open('about:blank', '_blank')
+  navigationBusy.value = true
   try {
-    const prepared = await studioApi(
-      `/discussions/${s.discussionId}/workspace`,
-      { requestId: requestId() }
-    )
-    workspaceToTrust.value = prepared.workspace
-    let binding
-    try {
-      binding = await studioApi(`/discussions/${s.discussionId}/pi-session`, {
-        requestId: requestId()
-      })
-    } catch (e) {
-      if (tab) {
-        tab.close()
-      }
-      throw e
-    }
-    workspaceToTrust.value = ''
-    if (tab) {
-      tab.opener = null
-      tab.location.href = binding.piWebUrl
-    } else window.location.assign(binding.piWebUrl)
-    await refreshAgent()
+    await navigatePiWeb(session, tab)
   } catch (e) {
+    tab?.close()
     agentError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    navigationBusy.value = false
   }
 }
-async function refreshAgent() {
-  const s = currentSession.value
-  if (!s) return
+async function navigatePiWeb(session: Obj, tab: Window | null) {
+  // Capture the returned session, never resolve a mutable current-session selector after awaiting.
+  const prepared = await studioApi(
+    `/discussions/${session.discussionId}/workspace`,
+    { requestId: requestId() }
+  )
+  let binding
   try {
-    const status = await studioApi(
-      `/discussions/${s.discussionId}/agent-status`
+    binding = await studioApi(
+      `/discussions/${session.discussionId}/pi-session`,
+      { requestId: requestId() }
     )
-    if (s.id === sessionId.value) agentStatus.value = status
-  } catch {
-    agentError.value = '状态暂不可用；可在 PiWeb 继续查看'
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    if (/guard|trust.*workspace/i.test(message)) {
+      workspaceToTrust.value = prepared.workspace
+      workspaceUrl.value = prepared.piWebWorkspaceUrl || ''
+      throw new Error(
+        '此 Workflow 的 PiWeb 工作区尚未就绪。请在 PiWeb 信任下方精确工作区并重新加载会话，再点击继续。',
+        { cause: e }
+      )
+    }
+    throw e
   }
+  if (
+    binding.discussionId !== session.discussionId ||
+    !binding.sessionId ||
+    !binding.piWebUrl
+  )
+    throw new Error('PiWeb 会话绑定不匹配，请重试')
+  workspaceToTrust.value = ''
+  workspaceUrl.value = ''
+  if (tab) {
+    tab.opener = null
+    tab.location.href = binding.piWebUrl
+  } else window.location.assign(binding.piWebUrl)
+  await refreshAgent()
+}
+async function refreshAgent() {
+  const chosen = definitions.value
+    .map((d) => workflowSession(d.id))
+    .filter(
+      (s): s is Obj =>
+        !!s &&
+        objects.value.some(
+          (b) =>
+            b.kind === 'pi_binding' &&
+            b.discussionId === s.discussionId &&
+            b.sessionId &&
+            b.guardVersion === 1 &&
+            b.status === 'bound'
+        )
+    )
+  const project = projectId.value
+  await Promise.allSettled(
+    chosen.map(async (session) => {
+      const status = await studioApi(
+        `/discussions/${session.discussionId}/agent-status`
+      )
+      if (projectId.value === project) agentStates.value[session.id] = status
+    })
+  )
 }
 async function authorizeWorkflow() {
   const s = currentSession.value
@@ -677,6 +855,11 @@ async function confirmConcept(resource: Obj) {
 }
 async function openRunSession(run: Obj) {
   sessionId.value = run.sessionId
+  const session = currentSession.value
+  if (session) {
+    activeWorkflowId.value = session.workflowId
+    workflowTargets.value[session.workflowId] = session.targetId
+  }
   await openPiWeb()
 }
 async function enterResourceSession(resource: Obj) {
@@ -940,7 +1123,7 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   display: grid;
-  grid-template-columns: 235px minmax(0, 1fr) 245px;
+  grid-template-columns: 290px minmax(0, 1fr);
   grid-template-rows: 70px minmax(0, 1fr);
   background: #101b25;
   color: var(--ink);
@@ -1033,9 +1216,6 @@ pre {
   width: 100%;
   text-align: left;
   margin-bottom: 7px;
-}
-.workflow-entry {
-  background: #203740;
 }
 .chosen {
   border-color: #6b9a87;
@@ -1165,11 +1345,6 @@ nav small {
     opacity: 0.35;
   }
 }
-.agent-card {
-  border-left: 1px solid var(--line);
-  padding: 20px 15px;
-  overflow: auto;
-}
 .agent-title {
   display: flex;
   gap: 8px;
@@ -1183,29 +1358,29 @@ nav small {
 .working {
   color: #97cfb5 !important;
 }
-.agent-card select,
-.agent-card > button {
+.workflow-details select,
+.workflow-details > button {
   width: 100%;
   margin-top: 12px;
 }
-.agent-card > p {
+.workflow-details > p {
   font-size: 11px;
   color: var(--muted);
 }
 .agent-summary {
-  max-height: 230px;
+  max-height: 120px;
   overflow: auto;
   color: #b0c1cf;
   font-size: 11px;
   border-bottom: 1px solid var(--line);
   padding-bottom: 18px;
 }
-.agent-card h3 {
+.workflow-details h3 {
   font-weight: 500;
   font-size: 12px;
   margin-top: 25px;
 }
-.agent-card label {
+.workflow-details label {
   font-size: 11px;
   margin: 10px 0;
 }
@@ -1334,5 +1509,46 @@ nav small {
 }
 .execution-modal :deep(.native-workflow) {
   top: 50px;
+}
+.workflow-item {
+  margin-bottom: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.workflow-entry {
+  background: #203740;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+}
+.workflow-entry strong {
+  font-weight: 500;
+}
+.workflow-continue {
+  width: 100%;
+  padding: 5px 11px;
+  text-align: left;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  color: #b5d9cc;
+  font-size: 11px;
+}
+.workflow-details {
+  overflow: auto;
+  padding: 12px;
+  border: 0;
+}
+.workflow-details select {
+  width: 100%;
+}
+.session-identity {
+  color: var(--muted);
+  font-size: 10px;
+}
+.workflow-details a {
+  color: #a5d9c7;
 }
 </style>

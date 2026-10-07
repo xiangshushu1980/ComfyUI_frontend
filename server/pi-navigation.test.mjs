@@ -20,6 +20,10 @@ test('exact session must enter native catalog before returning its navigation UR
   }
   const result = await bridge.ensureNavigable(binding)
   assert.match(result.piWebUrl, /session=exact$/)
+  assert.equal(
+    new URL(result.piWebWorkspaceUrl).searchParams.get('cwd'),
+    '/approved/workspace'
+  )
   assert.equal(sent.id, 'discussion')
   assert.equal(sent.body.requestId, 'initialize:exact')
   assert.match(sent.body.text, /不生成、不采用、不确认/)

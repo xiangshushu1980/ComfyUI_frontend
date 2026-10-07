@@ -166,6 +166,11 @@ test('bounded parallel concepts, durable provenance, confirmation-triggered seri
   )
   assert.equal(low.workflow.nodes.length, 10)
   assert.equal(
+    low.workflow.nodes.find((n) => n.type === 'KSampler').widgets_values_named
+      .control_after_generate,
+    'fixed'
+  )
+  assert.equal(
     store.list(p.id, 'data_relation').some((r) => r.fromId === run.id),
     false
   )

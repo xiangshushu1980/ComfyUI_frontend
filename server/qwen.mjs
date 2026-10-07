@@ -36,6 +36,11 @@ export function nativeSnapshot(graph) {
       workflow.nodes.push(node)
     }
     const names = Object.keys(node.widgets_values_named || {})
+    const seedControl = names.indexOf('control_after_generate')
+    if (seedControl >= 0) {
+      node.widgets_values[seedControl] = 'fixed'
+      node.widgets_values_named.control_after_generate = 'fixed'
+    }
     for (const [name, value] of Object.entries(entry.inputs))
       if (!Array.isArray(value)) {
         const index = names.indexOf(name)

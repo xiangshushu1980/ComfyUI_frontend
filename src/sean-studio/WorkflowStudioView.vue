@@ -125,14 +125,13 @@
           >
         </div>
       </section>
-      <label>长期数据</label
-      ><button @click="clearFocus">◈ 全部章节、场景与实体</button
+      <label>长期数据</label><button @click="clearFocus">◈ 工程首页</button
       ><button @click="importing = true">＋ 导入整本小说</button>
       <label>实体</label
       ><button
         v-for="entity in entities"
         :key="entity.id"
-        @click="select(entity)"
+        @click="select(entity, false)"
       >
         ◇ {{ entity.name }}<small>{{ kindName(entity.type) }}</small>
       </button>
@@ -145,19 +144,66 @@
       <p class="hint">在 PiWeb 表达目标。<br />这里检查对象、来源和结果。</p>
     </aside>
     <main>
-      <nav>
-        <div>
-          <strong>{{ focusId ? '章节聚焦' : '项目主数据图' }}</strong
-          ><small
-            >{{ chapters.length }} 章节 · {{ entities.length }} 实体 ·
-            {{ resources.length }} 资源</small
+      <nav class="canvas-navigation" aria-label="画布导航">
+        <button
+          :disabled="!navigationPath.length"
+          @click="navigatePath(navigationPath.slice(0, -1))"
+        >
+          ← 返回上一级
+        </button>
+        <div class="navigation-location">
+          <div class="breadcrumbs" aria-label="当前位置">
+            <button
+              :aria-current="!navigationPath.length ? 'page' : undefined"
+              @click="clearFocus"
+            >
+              {{ project?.name || '工程' }}
+            </button>
+            <template v-for="(id, index) in navigationPath" :key="id">
+              <span aria-hidden="true">/</span>
+              <button
+                :aria-current="
+                  index === navigationPath.length - 1 ? 'page' : undefined
+                "
+                :title="
+                  objectById(id)?.name || kindName(objectById(id)?.kind || '')
+                "
+                @click="navigatePath(navigationPath.slice(0, index + 1))"
+              >
+                {{
+                  objectById(id)?.name || kindName(objectById(id)?.kind || '')
+                }}
+              </button>
+            </template>
+          </div>
+          <small
+            >{{ visibleObjects.length }} 个当前对象 · {{ chapters.length }} 章节
+            · {{ entities.length }} 实体 · {{ resources.length }} 资源</small
           >
         </div>
-        <button v-if="focusId" @click="clearFocus">返回全部</button
-        ><button @click="fit">适配画布</button>
+        <button v-if="currentObject" @click="selected = currentObject">
+          当前对象详情
+        </button>
+        <button @click="fit">适配画布</button>
       </nav>
       <div ref="canvasHost" class="canvas-host">
         <canvas ref="canvasElement" />
+        <div
+          v-if="projectId && objects.length && !visibleObjects.length"
+          class="empty scope-empty"
+        >
+          <h2>暂无下级内容</h2>
+          <p>
+            {{ currentObject?.name || '当前位置' }} 的内容尚未创建，可在 PiWeb
+            中继续处理。
+          </p>
+          <button v-if="currentObject" @click="selected = currentObject">
+            查看当前对象详情
+          </button>
+          <button @click="navigatePath(navigationPath.slice(0, -1))">
+            返回上一级
+          </button>
+        </div>
         <div v-if="!objects.length" class="empty">
           <h1>从故事到形象</h1>
           <p>
@@ -352,6 +398,14 @@ import { LGraph, LGraphCanvas, LGraphNode } from '@/lib/litegraph/src/litegraph'
 import { toNodeId } from '@/types/nodeId'
 import NativeWorkflow from './NativeWorkflow.vue'
 import { requestId, studioApi } from './api'
+import {
+  hitCanvasNode,
+  objectHierarchy,
+  objectPath,
+  projectScope,
+  readRoute,
+  routeHash
+} from './canvasNavigation'
 type Obj = {
   id: string
   kind: string
@@ -364,11 +418,15 @@ type Obj = {
 const projects = ref<Obj[]>([]),
   objects = ref<Obj[]>([]),
   project = ref<Obj>(),
-  projectId = ref(localStorage.getItem('sean-studio-project') || ''),
+  projectId = ref(
+    readRoute(location.hash)?.projectId ||
+      localStorage.getItem('sean-studio-project') ||
+      ''
+  ),
   selected = ref<Obj | null>(null)
 const definitions = ref<Obj[]>([]),
   sessionId = ref(''),
-  focusId = ref(''),
+  navigationPath = ref<string[]>([]),
   showAllResources = ref(false),
   showHistory = ref(false)
 type AgentStatus = { working: boolean; summary: string; piWebUrl: string }
@@ -398,8 +456,14 @@ const canvasHost = ref<HTMLElement>(),
   canvasElement = ref<HTMLCanvasElement>(),
   native = ref<InstanceType<typeof NativeWorkflow>>(),
   executionSnapshot = ref<Obj | null>(null)
-const expandedEntities = new Set<string>(),
-  images = new Map<string, HTMLImageElement>()
+const images = new Map<string, HTMLImageElement>()
+const focusId = computed(() => navigationPath.value.at(-1) || '')
+const currentObject = computed(() => objectById(focusId.value))
+const visibleObjects = computed(() =>
+  projectScope(objects.value, focusId.value, showAllResources.value).filter(
+    (o) => !navigationPath.value.includes(o.id)
+  )
+)
 const chapters = computed(() =>
     objects.value.filter((o) => o.kind === 'chapter' && !o.supersededBy)
   ),
@@ -453,8 +517,9 @@ let graph: LGraph,
   events: EventSource | undefined,
   poll: ReturnType<typeof setInterval> | undefined,
   viewTimer: ReturnType<typeof setTimeout> | undefined,
-  viewRevision = 0,
   refreshing = false
+let pointerStart: { x: number; y: number } | undefined
+let pointerDragged = false
 function showError(e: unknown) {
   error.value = e instanceof Error ? e.message : String(e)
 }
@@ -477,9 +542,8 @@ async function openProject() {
   project.value = undefined
   objects.value = []
   selected.value = null
-  focusId.value = ''
+  navigationPath.value = []
   sessionId.value = ''
-  expandedEntities.clear()
   agentStates.value = {}
   if (!projectId.value) return
   localStorage.setItem('sean-studio-project', projectId.value)
@@ -487,15 +551,21 @@ async function openProject() {
     await refresh()
     activeWorkflowId.value = ''
     workflowTargets.value = {}
-    const view = await studioApi(
-      `/projects/${projectId.value}/views/master-v02-tree`
-    )
-    viewRevision = view.revision
+    const route = readRoute(location.hash)
+    navigationPath.value =
+      route?.projectId === projectId.value
+        ? route.path.filter((id) => objectById(id))
+        : []
+    const current = objectById(navigationPath.value.at(-1) || '')
+    selected.value =
+      current &&
+      !['source', 'chapter', 'scene', 'entity'].includes(current.kind)
+        ? current
+        : null
+    if (route?.projectId !== projectId.value) writeRoute()
     await nextTick()
     projectGraph()
-    canvas.ds.scale = view.scale || 0.75
-    canvas.ds.offset = view.offset || [60, 70]
-    canvas.setDirty(true, true)
+    restoreView()
     events = new EventSource(
       `/studio-api/v1/projects/${projectId.value}/events`
     )
@@ -519,12 +589,76 @@ async function newProject() {
     showError(e)
   }
 }
-function select(o: Obj) {
-  selected.value = o
-  if (o.kind === 'entity') {
-    expandedEntities.add(o.id)
-    projectGraph()
+function viewKey() {
+  return (
+    'sean-canvas-view:' +
+    routeHash({ projectId: projectId.value, path: navigationPath.value })
+  )
+}
+function rememberView() {
+  clearTimeout(viewTimer)
+  if (!projectId.value || !canvas) return
+  localStorage.setItem(
+    viewKey(),
+    JSON.stringify({
+      scale: canvas.ds.scale,
+      offset: Array.from(canvas.ds.offset)
+    })
+  )
+}
+function restoreView() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(viewKey()) || 'null')
+    if (
+      saved &&
+      Number.isFinite(saved.scale) &&
+      saved.scale > 0 &&
+      Array.isArray(saved.offset) &&
+      saved.offset.length === 2 &&
+      saved.offset.every(Number.isFinite)
+    ) {
+      canvas.ds.scale = saved.scale
+      canvas.ds.offset = saved.offset
+      canvas.setDirty(true, true)
+      return
+    }
+  } catch {
+    /* Ignore an invalid private viewport preference. */
   }
+  fit()
+}
+function writeRoute() {
+  const hash = routeHash({
+    projectId: projectId.value,
+    path: navigationPath.value
+  })
+  if (location.hash !== hash) history.pushState(null, '', hash)
+}
+function navigatePath(path: string[], updateUrl = true) {
+  rememberView()
+  navigationPath.value = path
+  const object = objectById(path.at(-1) || '')
+  selected.value =
+    object && !['source', 'chapter', 'scene', 'entity'].includes(object.kind)
+      ? object
+      : null
+  if (updateUrl) writeRoute()
+  projectGraph()
+  restoreView()
+}
+function select(o: Obj, contextual = true) {
+  if (focusId.value === o.id) {
+    selected.value = o
+    return
+  }
+  const existing = navigationPath.value.indexOf(o.id)
+  const path =
+    existing >= 0
+      ? navigationPath.value.slice(0, existing + 1)
+      : contextual && navigationPath.value.length
+        ? [...navigationPath.value, o.id]
+        : objectPath(o.id, objectHierarchy(objects.value))
+  navigatePath(path)
 }
 function selectId(id: string) {
   const o = objectById(id)
@@ -534,16 +668,21 @@ function selectOutput(id: string) {
   const o = resources.value.find((r) => r.assetId === id) || objectById(id)
   if (o) select(o)
 }
-function focusChapter(c: Obj) {
-  focusId.value = c.id
-  select(c)
-  projectGraph()
-  fit()
-}
 function clearFocus() {
-  focusId.value = ''
-  projectGraph()
-  fit()
+  navigatePath([])
+}
+async function restoreRoute() {
+  const route = readRoute(location.hash)
+  if (!route) return
+  if (route.projectId !== projectId.value) {
+    rememberView()
+    projectId.value = route.projectId
+    await openProject()
+  } else
+    navigatePath(
+      route.path.filter((id) => objectById(id)),
+      false
+    )
 }
 function chapterText(c: Obj) {
   return (
@@ -590,8 +729,9 @@ function workflowTarget(workflowId: string): string {
   if (definition?.target !== 'entity') return projectId.value
   if (Object.hasOwn(workflowTargets.value, workflowId))
     return workflowTargets.value[workflowId]
-  if (selected.value?.kind === 'entity') return selected.value.id
-  if (selected.value?.kind === 'resource') return selected.value.entityId
+  const target = selected.value || currentObject.value
+  if (target?.kind === 'entity') return target.id
+  if (target?.kind === 'resource') return target.entityId
   return (
     sessions.value.findLast((s) => s.workflowId === workflowId)?.targetId ||
     (entities.value.length === 1 ? entities.value[0].id : '')
@@ -686,8 +826,7 @@ async function enterWorkflow(workflowId: string, entityId?: string) {
   }
 }
 function expandSelectedEntity() {
-  if (selected.value) expandedEntities.add(selected.value.id)
-  projectGraph()
+  if (selected.value) select(selected.value)
 }
 async function openPiWeb() {
   const session = currentSession.value
@@ -898,85 +1037,8 @@ function fit() {
 function projectGraph() {
   if (!graph) return
   graph.clear()
-  const focus = objectById(focusId.value)
-  // Existing imports retain flat stable IDs; infer only their display hierarchy.
-  const chapterParents = new Map<string, string>()
-  const stacks = new Map<string, { id: string; level: number }[]>()
-  const orderedChapters = [...chapters.value].sort(
-    (a, b) => (a.order || 0) - (b.order || 0)
-  )
-  for (const chapter of orderedChapters) {
-    const heading = chapter.name || ''
-    const rawHeading = (objectById(chapter.sourceId)?.text || '')
-      .slice(chapter.start, chapter.end)
-      .split('\n')[0]
-    const markdown = /^(#{1,6})\s/.exec(rawHeading)
-    const level = markdown
-      ? markdown[1].length
-      : /^第[零〇一二三四五六七八九十百千万\d]+[卷部]/.test(heading)
-        ? 0
-        : /^第[零〇一二三四五六七八九十百千万\d]+节/.test(heading)
-          ? 2
-          : 1
-    const stack = stacks.get(chapter.sourceId) || []
-    while (stack.length && stack[stack.length - 1].level >= level) stack.pop()
-    chapterParents.set(
-      chapter.id,
-      chapter.parentId || stack.at(-1)?.id || chapter.sourceId
-    )
-    stack.push({ id: chapter.id, level })
-    stacks.set(chapter.sourceId, stack)
-  }
-  const inFocus = (id: string) => {
-    const seen = new Set<string>()
-    while (id && !seen.has(id)) {
-      if (id === focus?.id) return true
-      seen.add(id)
-      id = chapterParents.get(id) || ''
-    }
-    return false
-  }
-  const mentioned = new Set(
-    objects.value
-      .filter(
-        (o) =>
-          o.kind === 'data_relation' &&
-          inFocus(o.fromId) &&
-          o.type === 'mentions'
-      )
-      .map((o) => o.toId)
-  )
-  for (const e of entities.value)
-    if (
-      (e.sources || []).some((s: { sourceId: string; anchorId: string }) =>
-        orderedChapters.some(
-          (c) =>
-            inFocus(c.id) &&
-            s.sourceId === c.sourceId &&
-            c.anchorIds?.includes(s.anchorId)
-        )
-      )
-    )
-      mentioned.add(e.id)
-  const visible = objects.value.filter((o) => {
-    if (o.kind === 'chapter')
-      return !o.supersededBy && (!focus || inFocus(o.id))
-    if (o.kind === 'scene') return !focus || inFocus(o.chapterId)
-    if (o.kind === 'entity') return !focus || mentioned.has(o.id)
-    if (o.kind === 'resource')
-      return (
-        (!focus || mentioned.has(o.entityId)) &&
-        (showAllResources.value ||
-          expandedEntities.has(o.entityId) ||
-          ['concept', 'threeview'].includes(o.role))
-      )
-    if (o.kind === 'proposal')
-      return (
-        o.status === 'pending' &&
-        (!focus || o.basis?.some((b: { id: string }) => b.id === focus.id))
-      )
-    return o.kind === 'source' && (!focus || o.id === focus.sourceId)
-  })
+  const chapterParents = objectHierarchy(objects.value)
+  const visible = visibleObjects.value
   // Lay out a spanning forest; cross references remain edges, never duplicate nodes.
   const byId = new Map(visible.map((o) => [o.id, o]))
   const children = new Map<string, Obj[]>()
@@ -1075,7 +1137,14 @@ function projectGraph() {
       if (!o.assetId) {
         ctx.fillStyle = '#d4e0e6'
         ctx.fillText(
-          (o.description || o.brief || o.status || '点击查看').slice(0, 24),
+          (
+            o.description ||
+            o.brief ||
+            o.status ||
+            (['source', 'chapter', 'scene', 'entity'].includes(o.kind)
+              ? '点击进入下级内容'
+              : '点击查看详情')
+          ).slice(0, 24),
           14,
           76
         )
@@ -1140,23 +1209,7 @@ function resize() {
 }
 function saveView() {
   clearTimeout(viewTimer)
-  viewTimer = setTimeout(async () => {
-    if (!projectId.value) return
-    try {
-      const result = await studioApi(
-        `/projects/${projectId.value}/views/master-v02-tree`,
-        {
-          expectedRevision: viewRevision,
-          requestId: requestId(),
-          view: { scale: canvas.ds.scale, offset: Array.from(canvas.ds.offset) }
-        },
-        'PATCH'
-      )
-      viewRevision = result.revision
-    } catch (e) {
-      showError(e)
-    }
-  }, 600)
+  viewTimer = setTimeout(rememberView, 250)
 }
 watch([objects, focusId, showAllResources], projectGraph)
 onMounted(async () => {
@@ -1164,6 +1217,7 @@ onMounted(async () => {
   graph = new LGraph()
   canvas = new LGraphCanvas(canvasElement.value!, graph)
   canvas.read_only = true
+  canvas.allow_interaction = false
   canvas.show_info = false
   canvas.min_font_size_for_lod = 0
   canvas.background_image = ''
@@ -1209,17 +1263,32 @@ onMounted(async () => {
   }
   resizeObserver = new ResizeObserver(resize)
   resizeObserver.observe(canvasHost.value!)
+  canvasElement.value!.addEventListener('pointerdown', (event) => {
+    pointerStart = { x: event.clientX, y: event.clientY }
+    pointerDragged = false
+  })
+  canvasElement.value!.addEventListener('pointermove', (event) => {
+    if (
+      pointerStart &&
+      Math.hypot(
+        event.clientX - pointerStart.x,
+        event.clientY - pointerStart.y
+      ) > 6
+    )
+      pointerDragged = true
+  })
   canvasElement.value!.addEventListener('click', (event) => {
+    if (pointerDragged) return
     const [x, y] = canvas.convertEventToCanvasOffset(event)
-    const node = graph.getNodeOnPos(x, y)
+    const node = hitCanvasNode(graph.nodes, x, y)
     if (node) {
       const object = objectById(String(node.id))
-      if (object?.kind === 'chapter') focusChapter(object)
-      else selectId(String(node.id))
+      if (object) select(object)
     }
   })
   canvasElement.value!.addEventListener('pointerup', saveView)
   canvasElement.value!.addEventListener('wheel', saveView)
+  window.addEventListener('popstate', restoreRoute)
   poll = setInterval(() => void refreshAgent(), 5000)
   try {
     projects.value = await studioApi('/projects')
@@ -1230,6 +1299,7 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('popstate', restoreRoute)
   events?.close()
   clearInterval(poll)
   clearTimeout(viewTimer)
@@ -1377,6 +1447,37 @@ nav > div {
 nav small {
   display: block;
   font-size: 10px;
+}
+.canvas-navigation {
+  height: auto;
+  min-height: 70px;
+  flex-wrap: wrap;
+}
+.navigation-location {
+  flex: 1;
+  min-width: 160px;
+}
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.breadcrumbs button {
+  flex-shrink: 0;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 7px;
+}
+.breadcrumbs [aria-current='page'] {
+  color: #e2eaf0;
+  background: #294657;
+}
+.scope-empty {
+  max-width: 50%;
 }
 .canvas-host {
   flex: 1;

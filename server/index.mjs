@@ -47,6 +47,8 @@ export function createStudioServer({
           cap = req.headers.authorization?.replace(/^Bearer /, '')
         let result
         if (url.pathname === '/internal/pi/bind') result = pi.bind(cap, b)
+        else if (url.pathname === '/internal/pi/direct-input') result = pi.directInput(cap, b)
+        else if (url.pathname === '/internal/pi/direct-end') result = pi.directEnd(cap, b)
         else if (url.pathname === '/internal/pi/receipt')
           result = pi.receipt(cap, b)
         else if (url.pathname === '/internal/pi/request-audit') {
@@ -88,6 +90,25 @@ export function createStudioServer({
           const result = verifyWorkflow(b, compileQwen())
           store.compatSet('qwen-template-ui.v1', result)
           return send(result)
+        }
+        if ((m = path.match(/^\/discussions\/([^/]+)\/agent-status$/)) && req.method === 'GET') {
+          const d = store.get(m[1]), binding = store.list(d.projectId, 'pi_binding').find(b => b.discussionId === d.id)
+          if (!binding?.sessionId) return send({ working: false, summary: '', piWebUrl: null })
+          const state = await pi.request(`/api/agent/${binding.sessionId}`, { type: 'get_state' })
+          const history = await pi.messages(d.id)
+          const entries = history.context?.messages || history.context || []
+          const messages = Array.isArray(entries) ? entries.map(e => e.message || e) : []
+          const latest = [...messages].reverse().find(m => m.role === 'assistant')
+          const summary = typeof latest?.content === 'string' ? latest.content : (latest?.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
+          return send({ working: Boolean(state.data?.isStreaming || state.data?.isPromptRunning), summary: summary.slice(-600), piWebUrl: pi.publicBinding(binding).piWebUrl })
+        }
+        if ((m = path.match(/^\/discussions\/([^/]+)\/pi-context$/)) && req.method === 'POST') {
+          const b = await readBody(req), d = store.get(m[1])
+          return send(store.write(path, b, () => {
+            for (const c of b.links || []) requireThat(store.sameProject(c.id, d.projectId).revision === c.revision, 'context revision conflict', 409)
+            if (b.actionId) requireThat(store.sameProject(b.actionId, d.projectId, 'action').status === 'authorized', 'action unavailable', 403)
+            return store.update(d.id, d.revision, { links: b.links || [], pendingActionId: b.actionId || null })
+          }))
         }
         if (
           (m = path.match(/^\/discussions\/([^/]+)\/workspace$/)) &&

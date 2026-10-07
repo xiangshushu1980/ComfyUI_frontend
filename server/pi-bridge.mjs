@@ -77,7 +77,33 @@ export class PiBridge {
   }
   publicBinding(b) {
     const { capability, cwd, ...safe } = b
-    return { ...safe, workspace: cwd }
+    return { ...safe, workspace: cwd, piWebUrl: b.sessionId ? `${process.env.PI_WEB_PUBLIC_URL || this.url}/?session=${encodeURIComponent(b.sessionId)}` : null }
+  }
+  directInput(capability, body) {
+    const binding = this.authenticate(capability, body.sessionId)
+    const d = this.store.get(binding.discussionId)
+    return this.store.transaction(() => {
+      requireThat(!this.store.list(d.projectId, 'pi_turn').some(t =>
+        ['prepared', 'sending', 'received', 'accepted', 'delivery_unknown'].includes(t.status)),
+      'project already has active or uncertain turn', 409)
+      const context = d.links || []
+      for (const c of context)
+        requireThat(this.store.sameProject(c.id, d.projectId).revision === c.revision, 'context revision conflict', 409)
+      const action = d.pendingActionId ? this.store.get(d.pendingActionId) : null
+      const turn = this.store.create(d.projectId, 'pi_turn', {
+        discussionId: d.id, text: body.text, context, contextHash: hash(context),
+        receipt: randomBytes(32).toString('hex'), actionId: action?.status === 'authorized' && action.expiresAt > Date.now() ? action.id : null,
+        status: 'received', origin: 'piweb'
+      })
+      if (d.pendingActionId) this.store.update(d.id, d.revision, { pendingActionId: null })
+      return turn
+    })
+  }
+  directEnd(capability, body) {
+    const binding = this.authenticate(capability, body.sessionId)
+    const turn = this.store.sameProject(body.turnId, binding.projectId, 'pi_turn')
+    requireThat(turn.receipt === body.receipt && turn.discussionId === binding.discussionId, 'invalid receipt', 403)
+    return this.store.transaction(() => this.store.update(turn.id, turn.revision, { status: 'finished' }))
   }
   async launch(discussionId, body) {
     let b = await this.prepareWorkspace(discussionId)

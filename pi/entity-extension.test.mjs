@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { installEntityExtension } from './entity-extension.mjs'
-test('only business tool is active; foreign, nested and missing-receipt calls blocked', async () => {
+test('native PiWeb input obtains bound receipt; foreign and nested tools blocked', async () => {
   const hooks = new Map(),
     tools = [],
     active = []
@@ -18,7 +18,7 @@ test('only business tool is active; foreign, nested and missing-receipt calls bl
       const b = JSON.parse(r.body)
       assert.equal(b.sessionId, 'native-real')
       return Response.json(
-        url.endsWith('receipt')
+        url.endsWith('direct-input') ? { id: 'direct-turn', receipt: 'b'.repeat(64) } : url.endsWith('receipt')
           ? { id: b.turnId, receipt: b.receipt }
           : { ok: true }
       )
@@ -32,7 +32,7 @@ test('only business tool is active; foreign, nested and missing-receipt calls bl
     true
   )
   assert.deepEqual(await hooks.get('input')({ text: 'unbound' }, ctx), {
-    action: 'handled'
+    action: 'continue'
   })
   const receipt = 'a'.repeat(64)
   await hooks.get('input')(

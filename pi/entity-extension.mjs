@@ -41,8 +41,8 @@ export function installEntityExtension(pi, options = {}) {
       /^\[entity-studio-turn:([a-f0-9-]+):([a-f0-9]{64})\]\n/
     )
     if (!match) {
-      turn = undefined
-      return { action: 'handled' }
+      turn = await invoke('/internal/pi/direct-input', { text: event.text }, ctx)
+      return { action: 'continue' }
     }
     turn = await invoke(
       '/internal/pi/receipt',
@@ -118,6 +118,10 @@ export function installEntityExtension(pi, options = {}) {
   pi.on('session_shutdown', () => {
     turn = undefined
     binding = undefined
+  })
+  pi.on('agent_end', async (_event, ctx) => {
+    if (turn) await invoke('/internal/pi/direct-end', { turnId: turn.id, receipt: turn.receipt }, ctx)
+    turn = undefined
   })
   pi.registerTool({
     name: 'entity_studio',

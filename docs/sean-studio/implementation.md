@@ -31,3 +31,9 @@ Full native UI/PI two-round Qwen generation, node-event mapping, actual collecti
 ## Known implementation limits under review
 
 Thumbnails currently return original PNG bytes; add a true cached reduced image before treating large asset sets as performance-validated. Native PI SSE reconnect uses history snapshots but still needs adversarial stream/snapshot interleaving checks. Waiting-resource and collecting states expose no invented sampling percentage. Global third-party extensions execute as trusted host code; the tool hook is not a process sandbox. Compatibility promises cover the fixed Qwen node set only.
+
+## Sean’s interaction revision (2026-10-07)
+
+User instruction supersedes the embedded-chat portions of the original transport design: Agent work moves to PiWeb. Canvas retains only a narrow status/output card, explicit context handoff, and exact-session navigation. Removed frontend chat rendering, composer, stop control and message SSE. Server obtains lightweight native state/history summaries and supports receipt issuance for direct PiWeb input; the bound extension ends its audited turn on agent_end. Model/provider settings and shared ComfyUI lifecycle are unchanged. One-use generation authorization is handed to the next direct native turn, rather than sending a model prompt from the canvas.
+
+Legacy server send/history/event endpoints remain for compatibility but are no longer used by the product UI. This change does not imply adoption or generation acceptance.

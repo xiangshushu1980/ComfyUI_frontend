@@ -217,25 +217,15 @@
       <div class="pi-heading">
         <span class="pi-mark">π</span>
         <div>
-          <strong>创作讨论</strong><small>原生 PI · 多对象上下文</small>
+          <strong>Agent</strong
+          ><small>{{ agentStatus.working ? '正在工作' : '等待讨论' }}</small>
         </div>
         <button @click="newDiscussion">＋</button>
-      </div>
-      <div class="context">
-        <div class="section-label">
-          本轮带入 <span>{{ context.length }}</span>
-        </div>
-        <div v-for="(o, i) in context" :key="o.id" class="context-chip">
-          {{ o.name || kindName(o.kind) }} · v{{ o.revision
-          }}<button @click="context.splice(i, 1)">×</button>
-        </div>
-        <p v-if="!context.length">选中卡片后，点击“加入本轮讨论”。</p>
-        <small>移除对象不会清除已有会话历史。</small>
       </div>
       <select
         v-model="discussionId"
         class="discussion-select"
-        @change="restoreMessages"
+        @change="refreshAgent"
       >
         <option value="">新讨论</option>
         <option
@@ -246,39 +236,16 @@
           {{ d.name || d.goal }}
         </option>
       </select>
-      <div v-if="chat.length || streaming" class="chat-history">
-        <article v-for="(m, i) in chat" :key="m.id || i" :class="m.role">
-          <small>{{
-            m.role === 'user'
-              ? '你'
-              : m.role === 'assistant'
-                ? 'PI'
-                : '工具活动'
-          }}</small>
-          <pre>{{ m.text }}</pre>
-        </article>
-        <article v-if="streaming" class="assistant">
-          <small>PI · 回复中</small>
-          <pre>{{ streaming }}</pre>
-        </article>
-      </div>
-      <div v-else class="discussion-empty">
-        <div>π</div>
-        <h3>让故事里的对象彼此连接</h3>
-        <p>
-          选入原文、人物或场景后发起讨论。<br />PI
-          的建议经你采用后成为现行设定。
-        </p>
-        <span class="notice">{{ piStatus }}</span>
-      </div>
-      <div class="composer">
-        <textarea v-model="message" placeholder="这轮希望讨论什么？" />
-        <div>
-          <small>{{ discussionId ? '当前讨论已保存' : '先创建讨论' }}</small
-          ><button :disabled="sending" @click="sendMessage">
-            {{ sending ? '发送中' : '发送讨论 ↗' }}</button
-          ><button v-if="sending" @click="stopPi">停止回复</button>
+      <div class="context">
+        <div class="section-label">带入 PiWeb · {{ context.length }}</div>
+        <div v-for="(o, i) in context" :key="o.id" class="context-chip">
+          {{ o.name || kindName(o.kind)
+          }}<button @click="context.splice(i, 1)">×</button>
         </div>
+        <p>在 PiWeb 中与 Agent 讨论和查看完整输出。</p>
+        <pre class="agent-summary">{{ agentStatus.summary || '暂无输出' }}</pre>
+        <button class="primary" @click="openPiWeb()">打开对应 PiWeb ↗</button
+        ><small v-if="agentError">{{ agentError }}</small>
       </div>
     </aside>
     <div v-if="compareIds.length" class="compare-strip">
@@ -334,11 +301,6 @@ import { toNodeId } from '@/types/nodeId'
 import { LGraph, LGraphCanvas, LGraphNode } from '@/lib/litegraph/src/litegraph'
 import NativeWorkflow from './NativeWorkflow.vue'
 import { studioApi, requestId } from './api'
-type NativeMessage = {
-  role: string
-  content: string | { type: string; text?: string }[]
-}
-type NativeEntry = NativeMessage & { id: string; message?: NativeMessage }
 type Obj = {
   id: string
   kind: string
@@ -359,7 +321,6 @@ const projects = ref<Obj[]>([]),
   error = ref(''),
   nativeReady = ref(false),
   adoptKeys = ref<string[]>([]),
-  message = ref(''),
   imageDraft = ref({
     prompt: '',
     seed: 42,
@@ -369,10 +330,12 @@ const projects = ref<Obj[]>([]),
   }),
   compareIds = ref<string[]>([]),
   discussionId = ref(''),
-  chat = ref<{ id?: string; role: string; text: string }[]>([]),
-  streaming = ref(''),
-  piStatus = ref('原生 PI · 等待发送'),
-  sending = ref(false)
+  agentStatus = ref({
+    working: false,
+    summary: '',
+    piWebUrl: null as string | null
+  }),
+  agentError = ref('')
 const draft = ref({ name: '', text: '', chapterId: '' }),
   native = ref<InstanceType<typeof NativeWorkflow>>(),
   projectionHost = ref<HTMLElement>(),
@@ -410,7 +373,7 @@ function setFilter(kind: string) {
 function select(o: Obj) {
   if (o.kind === 'discussion') {
     discussionId.value = o.id
-    void restoreMessages()
+    void refreshAgent()
   }
   selected.value = o
   if (o.kind === 'entity') imageDraft.value.prompt = o.description || ''
@@ -429,7 +392,13 @@ async function openProject() {
     localStorage.setItem('sean-studio-project', projectId.value)
     selected.value = null
     context.value = []
+    discussionId.value = ''
+    agentStatus.value = { working: false, summary: '', piWebUrl: null }
+    agentError.value = ''
     await refresh()
+    discussionId.value =
+      objects.value.find((o) => o.kind === 'discussion')?.id || ''
+    void refreshAgent()
     const v = await studioApi(`/projects/${projectId.value}/views/studio`)
     viewRevision = v.revision
     await nextTick()
@@ -493,13 +462,13 @@ async function adoptSelected() {
 }
 async function newDiscussion() {
   discussionId.value = ''
-  message.value = ''
+  agentStatus.value = { working: false, summary: '', piWebUrl: null }
 }
 async function saveDiscussion() {
   try {
     if (!projectId.value) throw new Error('请先选择项目')
     const d = await studioApi(`/projects/${projectId.value}/discussions`, {
-      goal: message.value,
+      goal: '创作讨论',
       links: context.value.map((o) => ({
         id: o.id,
         revision: o.revision,
@@ -513,114 +482,46 @@ async function saveDiscussion() {
     showError(e)
   }
 }
-let piEvents: EventSource | undefined
-async function restoreMessages() {
+let agentPoll: ReturnType<typeof setInterval> | undefined
+async function refreshAgent() {
   if (!discussionId.value) return
+  const id = discussionId.value
   try {
-    const history = await studioApi(
-      `/discussions/${discussionId.value}/messages`
-    )
-    const context = history.context?.messages || history.context || []
-    chat.value = Array.isArray(context)
-      ? context
-          .map((entry: NativeEntry, i: number) => {
-            const m = entry.message || entry
-            return {
-              id: history.entryIds?.[i] || entry.id,
-              role: m.role,
-              text:
-                typeof m.content === 'string'
-                  ? m.content
-                  : (m.content || [])
-                      .filter(
-                        (b: { type: string; text?: string }) =>
-                          b.type === 'text'
-                      )
-                      .map((b: { text?: string }) => b.text)
-                      .join('\n')
-            }
-          })
-          .filter((m: { id: string; role: string; text: string }) =>
-            ['user', 'assistant', 'toolResult'].includes(m.role)
-          )
-          .map((m: { id: string; role: string; text: string }) => ({
-            ...m,
-            text: m.text.replace(/^\[entity-studio-turn:[^\]]+\]\n/, '')
-          }))
-      : []
-  } catch (e) {
-    piStatus.value = String(e)
-  }
-}
-function subscribePi() {
-  piEvents?.close()
-  piEvents = new EventSource(
-    `/studio-api/v1/discussions/${discussionId.value}/pi-events`
-  )
-  piEvents.onmessage = (event) => {
-    try {
-      const e = JSON.parse(event.data)
-      if (e.type === 'message_update') {
-        const delta = e.assistantMessageEvent?.delta
-        if (typeof delta === 'string') streaming.value += delta
-      }
-      if (
-        e.type === 'message_end' ||
-        e.type === 'agent_end' ||
-        e.type === 'agent_settled'
-      ) {
-        streaming.value = ''
-        void restoreMessages()
-        if (e.type === 'agent_end' || e.type === 'agent_settled')
-          sending.value = false
-      }
-      if (e.type === 'tool_execution_start')
-        piStatus.value = '正在读取或保存提案'
-    } catch {
-      // Ignore malformed transport fragments; native history remains authoritative.
+    const status = await studioApi(`/discussions/${id}/agent-status`)
+    if (id === discussionId.value) {
+      agentStatus.value = status
+      agentError.value = ''
     }
-  }
-  piEvents.onerror = () => {
-    piStatus.value = '连接中断，重新读取原会话历史'
-    void restoreMessages()
+  } catch {
+    agentError.value = '状态暂不可用，仍可在 PiWeb 查看'
   }
 }
-async function sendMessage() {
+async function openPiWeb(actionId?: string) {
+  const tab = window.open('about:blank', '_blank')
   try {
-    if (!message.value.trim()) return
     if (!discussionId.value) await saveDiscussion()
-    await studioApi(`/discussions/${discussionId.value}/pi-session`, {
-      requestId: requestId()
-    })
-    subscribePi()
-    const text = message.value
-    sending.value = true
-    await studioApi(`/discussions/${discussionId.value}/turns`, {
+    if (!discussionId.value) throw new Error('请先选择项目并创建讨论')
+    await studioApi(`/discussions/${discussionId.value}/pi-context`, {
       requestId: requestId(),
-      text,
-      context: context.value.map((o) => ({
+      links: context.value.map((o) => ({
         id: o.id,
         revision: o.revision,
         role: 'basis'
-      }))
+      })),
+      actionId
     })
-    chat.value.push({ role: 'user', text })
-    message.value = ''
-    piStatus.value = '原生 PI 回复中'
+    const binding = await studioApi(
+      `/discussions/${discussionId.value}/pi-session`,
+      { requestId: requestId() }
+    )
+    if (!binding.piWebUrl) throw new Error('PiWeb 会话尚未绑定')
+    if (tab) {
+      tab.opener = null
+      tab.location.href = binding.piWebUrl
+    } else window.location.assign(binding.piWebUrl)
+    await refreshAgent()
   } catch (e) {
-    sending.value = false
-    showError(e)
-  }
-}
-async function stopPi() {
-  try {
-    await studioApi(`/discussions/${discussionId.value}/stop`, {
-      requestId: requestId()
-    })
-    sending.value = false
-    streaming.value = ''
-    await restoreMessages()
-  } catch (e) {
+    tab?.close()
     showError(e)
   }
 }
@@ -670,16 +571,7 @@ async function authorizeInput(input: Obj) {
       inputHash: input.inputHash,
       authorizedOnce: true
     })
-    await studioApi(`/discussions/${discussionId.value}/pi-session`, {
-      requestId: requestId()
-    })
-    subscribePi()
-    await studioApi(`/discussions/${discussionId.value}/turns`, {
-      requestId: requestId(),
-      text: `用户通过输入卡明确授权只生成这一版。先 context/preview 核对，随后 submit_action，actionId=${action.id}。不要修改输入，不要采用事实或确认主形象。`,
-      context: [{ id: input.id, revision: input.revision, role: 'target' }],
-      actionId: action.id
-    })
+    await openPiWeb(action.id)
     await refresh()
   } catch (e) {
     showError(e)
@@ -885,6 +777,7 @@ onMounted(async () => {
   projectionCanvas.value!.addEventListener('pointerup', saveView)
   projectionCanvas.value!.addEventListener('wheel', saveView)
   fit()
+  agentPoll = setInterval(() => void refreshAgent(), 4000)
   try {
     projects.value = await studioApi('/projects')
     if (projectId.value) await openProject()
@@ -894,19 +787,27 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   events?.close()
-  piEvents?.close()
+  clearInterval(agentPoll)
   observer?.disconnect()
   canvas?.stopRendering()
   clearTimeout(viewTimer)
 })
 </script>
 <style scoped>
+.agent-summary {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+  font: inherit;
+  color: var(--muted);
+}
 .studio-shell {
   --ink: #e5eaf0;
   --muted: #8193a8;
   --stroke: #273342;
   display: grid;
-  grid-template-columns: 224px 1fr 350px;
+  grid-template-columns: 224px 1fr 250px;
   grid-template-rows: 64px 1fr;
   height: 100%;
   background: #101923;

@@ -1,0 +1,315 @@
+{
+  "owner": "Sean",
+  "date": "2026-10-07",
+  "taskId": "remote-31356340-f29d-4fd4-9919-e4abac5bf291",
+  "projectId": "b6d01a80-8662-413e-b33e-0a1450733380",
+  "sessionId": "f8e92fe2-eace-456b-9f28-f1f665bb2607",
+  "entityId": "ba87faf0-aca3-4677-89ab-db4fc149b91c",
+  "scope": "isolated integration fixture, automated_test; no user story facts adopted",
+  "concept": {
+    "id": "c4015c08-6bc0-4524-ab69-c33a35d044b1",
+    "status": "succeeded",
+    "parameters": {
+      "prompt": "A 30-year-old Chinese female lighthouse keeper, short black bob hair, navy blue work jacket with one square patch on the left sleeve, dark trousers, black work shoes. Full body, neutral standing pose, realistic studio photograph, plain gray background.\nFull-body concept portrait, one subject. ",
+      "count": 2,
+      "seed": 4207,
+      "steps": 25
+    },
+    "childRunIds": [
+      "e5b73e08-f520-4e48-bb78-e06e693e872e",
+      "1585d572-7d04-47e1-9be2-cda788432c0d"
+    ],
+    "outputs": [
+      "cffb095a-12d1-4358-b0ba-97ff917d661a",
+      "fe7161c0-6f5d-4ef0-abf0-f4cf77588d2c"
+    ]
+  },
+  "selection": {
+    "entityId": "ba87faf0-aca3-4677-89ab-db4fc149b91c",
+    "assetId": "cffb095a-12d1-4358-b0ba-97ff917d661a",
+    "actor": "automated_test",
+    "inputHash": "54dc989d8dc89d0a7a8f3a85df065f43da1d7f4861264b7a291a4024e59d2ef8",
+    "workflowRunId": "c4015c08-6bc0-4524-ab69-c33a35d044b1",
+    "id": "8cffb0f3-c2bc-4055-b99c-f5e0ef127c80",
+    "projectId": "b6d01a80-8662-413e-b33e-0a1450733380",
+    "kind": "appearance_selection",
+    "revision": 1,
+    "owner": "Sean"
+  },
+  "threeview": {
+    "id": "2696e560-c13b-4d7e-bbef-58c05f30bb85",
+    "status": "succeeded",
+    "parentRunId": "c4015c08-6bc0-4524-ab69-c33a35d044b1",
+    "inputs": [
+      {
+        "id": "ba87faf0-aca3-4677-89ab-db4fc149b91c",
+        "revision": 2,
+        "kind": "entity"
+      },
+      {
+        "id": "cffb095a-12d1-4358-b0ba-97ff917d661a",
+        "revision": 1,
+        "kind": "asset"
+      }
+    ],
+    "parameters": {
+      "prompt": "Composition: Clean 3:2 landscape layout on a warm off-white background with generous spacing. No frames, borders, dividers, text, labels, watermarks, or logos. Soft, even neutral studio lighting across all panels. Rendering style, line weight, texture, and shading must strictly match the reference image.\nThree full-height, identically scaled figures of the reference subject arranged left to right: Front View, Clean Side Profile, and Back View. Neutral relaxed stance, head to feet visible in every figure. Soft oval floor shadows.\nConsistency & Constraints: Preserve exact identity, hair, facial features, garments, asymmetry, and accessories from the reference. Do not add, redesign, beautify, age, or extrapolate items based on lore/profession. No extra characters, shifting proportions, extra limbs, or style drift.",
+      "count": 1,
+      "seed": 42,
+      "steps": 25
+    },
+    "childRunIds": ["e100e96b-9606-4a9b-b1b5-e1f38e47d05c"],
+    "outputs": ["f5e7b45e-94e7-44b0-a360-249195af4a30"]
+  },
+  "children": [
+    {
+      "id": "e5b73e08-f520-4e48-bb78-e06e693e872e",
+      "promptId": "caa2427e-f75b-4642-80bc-494b51aba39c",
+      "executionKey": "c220a83b-2d46-4417-ba79-ee0d5401fae1",
+      "stage": "concept",
+      "status": "succeeded",
+      "apiHash": "b4aa3010caf623ebdcfc33150a73ed79ba364ad73f81f3176c7a422369516493",
+      "uiHash": "d1cc957f212bd410e0f84dc03794418f0fc72f389f5790ec57187a51e2c159ba",
+      "inputHash": "54dc989d8dc89d0a7a8f3a85df065f43da1d7f4861264b7a291a4024e59d2ef8",
+      "nodes": {
+        "7": {
+          "event": "progress",
+          "value": 25,
+          "max": 25,
+          "prompt_id": "caa2427e-f75b-4642-80bc-494b51aba39c",
+          "node": "7"
+        },
+        "8": {
+          "event": "executing",
+          "node": "8",
+          "display_node": "8",
+          "prompt_id": "caa2427e-f75b-4642-80bc-494b51aba39c"
+        },
+        "9": {
+          "event": "executed",
+          "node": "9",
+          "display_node": "9",
+          "output": {
+            "images": [
+              {
+                "filename": "concept_00001_.png",
+                "subfolder": "sean_entity_canvas/runs/e5b73e08-f520-4e48-bb78-e06e693e872e",
+                "type": "output",
+                "id": "0322b29c-54be-4c54-9dd0-cbd22df9cff9"
+              }
+            ]
+          },
+          "prompt_id": "caa2427e-f75b-4642-80bc-494b51aba39c"
+        }
+      },
+      "outputs": ["cffb095a-12d1-4358-b0ba-97ff917d661a"]
+    },
+    {
+      "id": "1585d572-7d04-47e1-9be2-cda788432c0d",
+      "promptId": "000722f1-0727-4560-b446-1f7b237da4a1",
+      "executionKey": "ff2297f9-c546-46f8-953c-c88f0f0a5d8c",
+      "stage": "concept",
+      "status": "succeeded",
+      "apiHash": "0e8f277d10263db9df711451457730f37788df2bd12217a764937ea605fedea1",
+      "uiHash": "460423a5652d62516d49d311577313647a5673b21d300023494308364de12e16",
+      "inputHash": "a5cb98aaa62dbebdacb6f8f22c179751b7131eb88ac5dcbb70a2b59630a0ada1",
+      "nodes": {
+        "1": {
+          "event": "executing",
+          "node": "1",
+          "display_node": "1",
+          "prompt_id": "000722f1-0727-4560-b446-1f7b237da4a1"
+        },
+        "2": {
+          "event": "executing",
+          "node": "2",
+          "display_node": "2",
+          "prompt_id": "000722f1-0727-4560-b446-1f7b237da4a1"
+        },
+        "4": {
+          "event": "executing",
+          "node": "4",
+          "display_node": "4",
+          "prompt_id": "000722f1-0727-4560-b446-1f7b237da4a1"
+        },
+        "5": {
+          "event": "executing",
+          "node": "5",
+          "display_node": "5",
+          "prompt_id": "000722f1-0727-4560-b446-1f7b237da4a1"
+        },
+        "6": {
+          "event": "executing",
+          "node": "6",
+          "display_node": "6",
+          "prompt_id": "000722f1-0727-4560-b446-1f7b237da4a1"
+        },
+        "7": {
+          "event": "progress",
+          "value": 25,
+          "max": 25,
+          "prompt_id": "000722f1-0727-4560-b446-1f7b237da4a1",
+          "node": "7"
+        },
+        "8": {
+          "event": "executing",
+          "node": "8",
+          "display_node": "8",
+          "prompt_id": "000722f1-0727-4560-b446-1f7b237da4a1"
+        },
+        "9": {
+          "event": "executed",
+          "node": "9",
+          "display_node": "9",
+          "output": {
+            "images": [
+              {
+                "filename": "concept_00001_.png",
+                "subfolder": "sean_entity_canvas/runs/1585d572-7d04-47e1-9be2-cda788432c0d",
+                "type": "output",
+                "id": "022c2465-c9d6-4b98-87dd-3632147df475"
+              }
+            ]
+          },
+          "prompt_id": "000722f1-0727-4560-b446-1f7b237da4a1"
+        }
+      },
+      "outputs": ["fe7161c0-6f5d-4ef0-abf0-f4cf77588d2c"]
+    },
+    {
+      "id": "e100e96b-9606-4a9b-b1b5-e1f38e47d05c",
+      "promptId": "ebadd649-fad4-486d-a59b-ed4f8719006a",
+      "executionKey": "f199b9dd-8aa8-4228-9310-16889a2b368c",
+      "stage": "threeview",
+      "status": "succeeded",
+      "apiHash": "86268e76b490f64a7a25ce57e2a8abb3fdd661590e345ca821b6ded5310ae03a",
+      "uiHash": "1d918749a40d344948c63a2af9e38ef0b3b06808b62058ffa73d20a5142fef6a",
+      "inputHash": "14ee1d757159fdc27076a5aec190856d2d648aee22dae4511e49c25535685c22",
+      "nodes": {
+        "1": {
+          "event": "execution_cached"
+        },
+        "2": {
+          "event": "execution_cached"
+        },
+        "3": {
+          "event": "execution_cached"
+        },
+        "4": {
+          "event": "execution_cached"
+        },
+        "5": {
+          "event": "executing",
+          "node": "5",
+          "display_node": "5",
+          "prompt_id": "ebadd649-fad4-486d-a59b-ed4f8719006a"
+        },
+        "6": {
+          "event": "execution_cached"
+        },
+        "7": {
+          "event": "progress",
+          "value": 25,
+          "max": 25,
+          "prompt_id": "ebadd649-fad4-486d-a59b-ed4f8719006a",
+          "node": "7"
+        },
+        "8": {
+          "event": "executing",
+          "node": "8",
+          "display_node": "8",
+          "prompt_id": "ebadd649-fad4-486d-a59b-ed4f8719006a"
+        },
+        "9": {
+          "event": "executed",
+          "node": "9",
+          "display_node": "9",
+          "output": {
+            "images": [
+              {
+                "filename": "concept_00001_.png",
+                "subfolder": "sean_entity_canvas/runs/e100e96b-9606-4a9b-b1b5-e1f38e47d05c",
+                "type": "output",
+                "id": "19124a62-a9a4-45d3-8670-9d85d7458893"
+              }
+            ]
+          },
+          "prompt_id": "ebadd649-fad4-486d-a59b-ed4f8719006a"
+        },
+        "10": {
+          "event": "executing",
+          "node": "10",
+          "display_node": "10",
+          "prompt_id": "ebadd649-fad4-486d-a59b-ed4f8719006a"
+        }
+      },
+      "outputs": ["f5e7b45e-94e7-44b0-a360-249195af4a30"]
+    }
+  ],
+  "assets": [
+    {
+      "id": "cffb095a-12d1-4358-b0ba-97ff917d661a",
+      "runId": "e5b73e08-f520-4e48-bb78-e06e693e872e",
+      "hash": "566dcf7c2bf085a6002d1243cc81c2f73476bd0f1b3ea492e057f0429fb786f5",
+      "path": "media/566dcf7c2bf085a6002d1243cc81c2f73476bd0f1b3ea492e057f0429fb786f5.png",
+      "width": 1536,
+      "height": 1024,
+      "sourceAssetIds": [],
+      "sharedOutputCleaned": true
+    },
+    {
+      "id": "fe7161c0-6f5d-4ef0-abf0-f4cf77588d2c",
+      "runId": "1585d572-7d04-47e1-9be2-cda788432c0d",
+      "hash": "3d9ce18fa00dd83b8450ef234f66e0f5a3460395f7b4a8b661ba39446b1d9479",
+      "path": "media/3d9ce18fa00dd83b8450ef234f66e0f5a3460395f7b4a8b661ba39446b1d9479.png",
+      "width": 1536,
+      "height": 1024,
+      "sourceAssetIds": [],
+      "sharedOutputCleaned": true
+    },
+    {
+      "id": "f5e7b45e-94e7-44b0-a360-249195af4a30",
+      "runId": "e100e96b-9606-4a9b-b1b5-e1f38e47d05c",
+      "hash": "30206b58922807a311b43bc146b3db2c7364f51f0c7de7c6596880577f7d7434",
+      "path": "media/30206b58922807a311b43bc146b3db2c7364f51f0c7de7c6596880577f7d7434.png",
+      "width": 1536,
+      "height": 1024,
+      "sourceAssetIds": ["cffb095a-12d1-4358-b0ba-97ff917d661a"],
+      "sharedOutputCleaned": true
+    }
+  ],
+  "verification": {
+    "sha256": true,
+    "sharedOutputCleanup": true,
+    "replaySameSelection": true,
+    "exactlyOneThreeView": true,
+    "realThumbnails": true,
+    "waitingConfirmationRestart": true,
+    "browserRefresh": true,
+    "completedOverlaysFolded": true,
+    "historyAndProvenanceAccessible": true,
+    "agentVisionReadSucceeded": true
+  },
+  "visualReview": {
+    "concept": "Two full-body gray-background candidates; bob hair, navy workwear, square left-sleeve patch. Selected gray patch candidate after direct image inspection.",
+    "threeview": "Front/side/back complete, off-white background; face/hair/clothing/gray left-sleeve patch broadly consistent. Front is slightly three-quarter, not strictly orthographic."
+  },
+  "agentVisionAudits": [
+    {
+      "id": "15de11ce-25a6-4c56-82b1-99003318a736",
+      "tool": "view_image",
+      "assetId": "cffb095a-12d1-4358-b0ba-97ff917d661a",
+      "turnId": "53a3d27b-ed20-4e96-9e28-69da9932792a"
+    },
+    {
+      "id": "2bc884ee-66b3-4dd9-858f-4384ff4094bd",
+      "tool": "view_image",
+      "assetId": "f5e7b45e-94e7-44b0-a360-249195af4a30",
+      "turnId": "53a3d27b-ed20-4e96-9e28-69da9932792a"
+    }
+  ],
+  "tests": {
+    "passed": 18,
+    "command": "scripts/sean-studio/run.sh test"
+  }
+}

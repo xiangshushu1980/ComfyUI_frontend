@@ -1,14 +1,20 @@
 <!-- eslint-disable @intlify/vue-i18n/no-raw-text -- Sean v0.2 UI is Chinese. -->
 <template>
-  <div class="workspace">
-    <header>
-      <div class="logo">
-        ◈ <strong>STORY / STUDIO</strong><small>Sean · AI 创作工作空间</small>
-      </div>
-      <span>{{ project?.name || '选择工程' }}</span
-      ><span class="version">主数据图 + 执行覆盖 · v0.2</span>
-    </header>
-    <aside class="library">
+  <div :class="['workspace', { 'library-collapsed': !libraryOpen }]">
+    <div class="floating-brand">
+      <span class="brand-mark" aria-hidden="true">◈</span>
+      <span class="brand-project">{{ project?.name || 'STUDIO' }}</span>
+      <button
+        type="button"
+        class="library-toggle"
+        :aria-label="libraryOpen ? '收起左侧面板' : '展开左侧面板'"
+        :title="libraryOpen ? '收起左侧面板' : '展开左侧面板'"
+        @click="libraryOpen = !libraryOpen"
+      >
+        {{ libraryOpen ? '‹' : '›' }}
+      </button>
+    </div>
+    <aside v-if="libraryOpen" class="library">
       <label>影片工程</label
       ><select
         v-model="projectId"
@@ -48,7 +54,11 @@
             navigationBusy && activeWorkflowId === d.id
               ? '正在打开…'
               : workspaceTrustPending(d.id)
-                ? '查看信任入口'
+                ? trustEntryOpenedFor === d.id
+                  ? '继续 PiWeb ↗'
+                  : workspaceUrl && activeWorkflowId === d.id
+                    ? '打开工作区信任入口 ↗'
+                    : '查看信任入口'
                 : '继续 PiWeb ↗'
           }}
         </button>
@@ -116,15 +126,27 @@
           >
           <p v-if="agentError" class="error">{{ agentError }}</p>
           <p v-if="workspaceToTrust" class="hint">
-            此 Workflow 的精确工作区尚需信任。请打开下方入口，在 PiWeb
-            明确信任并加载该工作区后，返回这里继续：<br />{{ workspaceToTrust }}
+            信任只授权 PiWeb 加载此
+            Workflow，不会自动创建对话。请先信任精确工作区， 再打开对应 PiWeb
+            会话（若已有），或返回这里点“继续 PiWeb”：<br />{{
+              workspaceToTrust
+            }}
           </p>
           <a
             v-if="workspaceUrl"
             :href="workspaceUrl"
             target="_blank"
             rel="noopener noreferrer"
+            @click="markTrustEntryOpened(d.id)"
             >在 PiWeb 打开精确工作区并信任 ↗</a
+          >
+          <a
+            v-if="workspaceSessionUrl"
+            :href="workspaceSessionUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            @click="markTrustEntryOpened(d.id)"
+            >信任后重新加载此 PiWeb 会话 ↗</a
           >
         </div>
       </section>
@@ -420,6 +442,7 @@ type Obj = {
   [key: string]: any
 }
 const projects = ref<Obj[]>([]),
+  libraryOpen = ref(true),
   objects = ref<Obj[]>([]),
   project = ref<Obj>(),
   projectId = ref(
@@ -446,7 +469,9 @@ const agentStatus = computed(
 const activeWorkflowId = ref(''),
   workflowTargets = ref<Record<string, string>>({}),
   navigationBusy = ref(false),
-  workspaceUrl = ref('')
+  workspaceUrl = ref(''),
+  workspaceSessionUrl = ref(''),
+  trustEntryOpenedFor = ref('')
 const agentError = ref(''),
   workspaceToTrust = ref(''),
   error = ref('')
@@ -843,6 +868,8 @@ async function selectWorkflow(workflowId: string) {
   agentError.value = ''
   workspaceToTrust.value = ''
   workspaceUrl.value = ''
+  workspaceSessionUrl.value = ''
+  trustEntryOpenedFor.value = ''
   if (!projectId.value || !workflowTarget(workflowId)) return
   const project = projectId.value
   try {
@@ -870,11 +897,18 @@ async function changeWorkflowTarget(workflowId: string, event: Event) {
 }
 async function enterWorkflow(workflowId: string, entityId?: string) {
   if (navigationBusy.value) return
+  const canContinueAfterTrust =
+    workspaceTrustPending(workflowId) &&
+    trustEntryOpenedFor.value === workflowId
   if (entityId) workflowTargets.value[workflowId] = entityId
   activeWorkflowId.value = workflowId
   agentError.value = ''
-  workspaceToTrust.value = ''
-  workspaceUrl.value = ''
+  if (!workspaceTrustPending(workflowId)) {
+    workspaceToTrust.value = ''
+    workspaceUrl.value = ''
+    workspaceSessionUrl.value = ''
+    trustEntryOpenedFor.value = ''
+  }
   if (!projectId.value || !workflowTarget(workflowId)) {
     agentError.value = '请先选择工程及目标实体'
     return
@@ -885,7 +919,11 @@ async function enterWorkflow(workflowId: string, entityId?: string) {
     try {
       await refresh()
       const latestSession = workflowSession(workflowId)
-      if (latestSession && workspaceTrustPending(workflowId)) {
+      if (
+        latestSession &&
+        workspaceTrustPending(workflowId) &&
+        !canContinueAfterTrust
+      ) {
         await showWorkspaceTrustEntry(workflowId, latestSession)
         return
       }
@@ -919,20 +957,32 @@ async function showWorkspaceTrustEntry(workflowId: string, session: Obj) {
   if (activeWorkflowId.value !== workflowId) return
   workspaceToTrust.value = prepared.workspace
   workspaceUrl.value = prepared.piWebWorkspaceUrl || ''
+  workspaceSessionUrl.value = prepared.piWebUrl || ''
+  trustEntryOpenedFor.value = ''
   agentError.value = workspaceUrl.value
-    ? '先在 PiWeb 信任并加载该精确工作区，再返回此处继续。'
+    ? '请按上方说明完成信任，再继续打开此 Workflow 的 PiWeb 对话。'
     : '无法生成工作区信任入口，请稍后重试。'
+}
+function markTrustEntryOpened(workflowId: string) {
+  trustEntryOpenedFor.value = workflowId
 }
 async function openPiWeb() {
   const session = currentSession.value
   if (!session || navigationBusy.value) return
+  const canContinueAfterTrust =
+    workspaceTrustPending(session.workflowId) &&
+    trustEntryOpenedFor.value === session.workflowId
   activeWorkflowId.value = session.workflowId
   workflowTargets.value[session.workflowId] = session.targetId
   if (workspaceTrustPending(session.workflowId)) {
     try {
       await refresh()
       const latestSession = workflowSession(session.workflowId)
-      if (latestSession && workspaceTrustPending(session.workflowId)) {
+      if (
+        latestSession &&
+        workspaceTrustPending(session.workflowId) &&
+        !canContinueAfterTrust
+      ) {
         await showWorkspaceTrustEntry(session.workflowId, latestSession)
         return
       }
@@ -969,6 +1019,8 @@ async function navigatePiWeb(session: Obj, tab: Window | null) {
     if (/guard|trust.*workspace/i.test(message)) {
       workspaceToTrust.value = prepared.workspace
       workspaceUrl.value = prepared.piWebWorkspaceUrl || ''
+      workspaceSessionUrl.value = prepared.piWebUrl || ''
+      trustEntryOpenedFor.value = ''
       throw new Error(
         '此 Workflow 的 PiWeb 工作区尚未就绪。请在 PiWeb 信任下方精确工作区并重新加载会话，再点击继续。',
         { cause: e }
@@ -984,6 +1036,8 @@ async function navigatePiWeb(session: Obj, tab: Window | null) {
     throw new Error('PiWeb 会话绑定不匹配，请重试')
   workspaceToTrust.value = ''
   workspaceUrl.value = ''
+  workspaceSessionUrl.value = ''
+  trustEntryOpenedFor.value = ''
   if (tab) {
     tab.opener = null
     tab.location.href = binding.piWebUrl
@@ -1516,32 +1570,60 @@ onBeforeUnmount(() => {
   inset: 0;
   display: grid;
   grid-template-columns: 290px minmax(0, 1fr);
-  grid-template-rows: 70px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   background: #101b25;
   color: var(--ink);
   font: 13px/1.6 system-ui;
 }
-header {
-  grid-column: 1/-1;
+.library-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+.floating-brand {
+  position: absolute;
+  z-index: 20;
+  top: 12px;
+  left: 302px;
   display: flex;
   align-items: center;
-  gap: 40px;
-  padding: 0 25px;
-  border-bottom: 1px solid var(--line);
-  background: #14222e;
+  gap: 9px;
+  max-width: min(360px, calc(100vw - 24px));
+  padding: 6px 8px 6px 11px;
+  border: 1px solid #344b5b;
+  border-radius: 10px;
+  background: rgb(20 34 46 / 92%);
+  box-shadow: 0 5px 18px rgb(0 0 0 / 24%);
+  backdrop-filter: blur(10px);
 }
-.logo strong {
-  letter-spacing: 2px;
+.library-collapsed .floating-brand {
+  left: 12px;
 }
-.logo small {
-  display: block;
+.brand-mark {
+  color: #94c8b1;
+  font-size: 16px;
+}
+.brand-project {
+  overflow: hidden;
+  color: #e2eaf0;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-toggle {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 0;
+  background: transparent;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 20px;
+  line-height: 1.2;
+}
+.library-toggle:hover {
+  color: var(--ink);
 }
 .version {
-  margin-left: auto;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
 }
 button,
 select,
@@ -1652,6 +1734,11 @@ nav small {
   height: auto;
   min-height: 70px;
   flex-wrap: wrap;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+.workspace:not(.library-collapsed) .canvas-navigation {
+  padding-left: 302px;
 }
 .navigation-location {
   flex: 1;

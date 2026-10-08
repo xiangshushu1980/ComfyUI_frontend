@@ -9,7 +9,9 @@ Owner: Sean. v1, awaiting validation in a new workflow conversation.
 
 ## Goal
 
-Create a small, reviewable proposal for one selected chapter. Extract only information useful for later film production: recurring characters, meaningful locations, important props, and explicit relationships. Keep every claim traceable to the novel. Proposals wait for human review; this skill never adopts candidates.
+Create a small, reviewable proposal for one selected chapter in any novel project; this skill is not tailored to a particular story or screenplay. Extract only information useful for later film production: recurring characters, meaningful locations, important props, and explicit relationships. Keep every claim traceable to the novel. Proposals wait for human review; this skill never adopts candidates.
+
+This v1 covers one selected chapter at a time. `read_chapter` pagination only retrieves the rest of that same chapter when the tool response is paged. Do not design or attempt advanced long-text chunking, cross-chunk entity merging, or cross-chapter identity resolution yet. If a chapter is too long to analyze reliably as one unit, pause and ask the user to narrow the scope; revisit a larger-text workflow when the screenplay grows.
 
 ## Read before extracting
 

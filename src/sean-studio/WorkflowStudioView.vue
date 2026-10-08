@@ -55,7 +55,7 @@
               ? '正在打开…'
               : workspaceTrustPending(d.id)
                 ? trustEntryOpenedFor === d.id
-                  ? '继续 PiWeb ↗'
+                  ? '打开并验证 PiWeb 会话 ↗'
                   : workspaceUrl && activeWorkflowId === d.id
                     ? '打开工作区信任入口 ↗'
                     : '查看信任入口'
@@ -126,11 +126,9 @@
           >
           <p v-if="agentError" class="error">{{ agentError }}</p>
           <p v-if="workspaceToTrust" class="hint">
-            信任只授权 PiWeb 加载此
-            Workflow，不会自动创建对话。请先信任精确工作区， 再打开对应 PiWeb
-            会话（若已有），或返回这里点“继续 PiWeb”：<br />{{
-              workspaceToTrust
-            }}
+            点击信任后还需重新加载下面这个精确 PiWeb
+            会话，扩展才会回传验证状态。 请信任工作区，然后返回这里点“打开并验证
+            PiWeb 会话”：<br />{{ workspaceToTrust }}
           </p>
           <a
             v-if="workspaceUrl"
@@ -897,10 +895,10 @@ async function changeWorkflowTarget(workflowId: string, event: Event) {
 }
 async function enterWorkflow(workflowId: string, entityId?: string) {
   if (navigationBusy.value) return
+  if (entityId) workflowTargets.value[workflowId] = entityId
   const canContinueAfterTrust =
     workspaceTrustPending(workflowId) &&
     trustEntryOpenedFor.value === workflowId
-  if (entityId) workflowTargets.value[workflowId] = entityId
   activeWorkflowId.value = workflowId
   agentError.value = ''
   if (!workspaceTrustPending(workflowId)) {
@@ -911,6 +909,43 @@ async function enterWorkflow(workflowId: string, entityId?: string) {
   }
   if (!projectId.value || !workflowTarget(workflowId)) {
     agentError.value = '请先选择工程及目标实体'
+    return
+  }
+  if (canContinueAfterTrust && workspaceSessionUrl.value) {
+    // Trust is registered by PiWeb only when the exact existing session is
+    // reloaded. Calling the server launch endpoint here cannot trigger that
+    // session_start hook, so navigate directly to the previously bound session.
+    const tab = window.open('about:blank', '_blank')
+    if (!tab) {
+      agentError.value =
+        '浏览器拦截了新标签页，请使用下方“信任后重新加载此 PiWeb 会话”链接。'
+      return
+    }
+    tab.opener = null
+    tab.location.href = workspaceSessionUrl.value
+    navigationBusy.value = true
+    try {
+      agentError.value = '正在等待 PiWeb 加载扩展并验证此工作区…'
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        await refresh()
+        if (!workspaceTrustPending(workflowId)) {
+          workspaceToTrust.value = ''
+          workspaceUrl.value = ''
+          workspaceSessionUrl.value = ''
+          trustEntryOpenedFor.value = ''
+          agentError.value = '工作区信任已验证，PiWeb 会话已打开。'
+          await refreshAgent()
+          return
+        }
+      }
+      agentError.value =
+        'PiWeb 尚未回传验证状态。请确认新标签页已加载完成，再点此按钮重试。'
+    } catch (e) {
+      agentError.value = e instanceof Error ? e.message : String(e)
+    } finally {
+      navigationBusy.value = false
+    }
     return
   }
   const existingSession = workflowSession(workflowId)
@@ -1022,7 +1057,7 @@ async function navigatePiWeb(session: Obj, tab: Window | null) {
       workspaceSessionUrl.value = prepared.piWebUrl || ''
       trustEntryOpenedFor.value = ''
       throw new Error(
-        '此 Workflow 的 PiWeb 工作区尚未就绪。请在 PiWeb 信任下方精确工作区并重新加载会话，再点击继续。',
+        '此 Workflow 的 PiWeb 工作区尚未就绪。请信任精确工作区，再重新加载此 PiWeb 会话以完成验证。',
         { cause: e }
       )
     }

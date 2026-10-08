@@ -1,7 +1,7 @@
 // Owner: Sean. Loopback product gateway, independent of the shared ComfyUI store.
 import { createServer } from 'node:http'
 import { homedir } from 'node:os'
-import { join, resolve, extname } from 'node:path'
+import { basename, join, resolve, extname } from 'node:path'
 import { readFile, stat } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { Store, hash, requireThat } from './store.mjs'
@@ -37,6 +37,12 @@ export function createStudioServer({
   }, 1000)
   const publicObject = (o) => {
     const { capability, receipt, cwd, ...safe } = o
+    if (o.kind === 'pi_binding' && typeof cwd === 'string')
+      return {
+        ...safe,
+        workspaceId: hash(cwd).slice(0, 16),
+        workspaceLabel: `agent-workspace/${basename(cwd)}`
+      }
     return safe
   }
   const server = createServer(async (req, res) => {
@@ -200,15 +206,37 @@ export function createStudioServer({
               .list(d.projectId, 'pi_binding')
               .find((b) => b.discussionId === d.id)
           if (!binding?.sessionId)
-            return send({ working: false, summary: '', piWebUrl: null })
-          const state = await pi.request(`/api/agent/${binding.sessionId}`, {
-            type: 'get_state'
-          })
-          const history = await pi.messages(d.id)
-          const entries = history.context?.messages || history.context || []
-          const messages = Array.isArray(entries)
-            ? entries.map((e) => e.message || e)
-            : []
+            return send({
+              working: false,
+              summary: '',
+              piWebUrl: null,
+              messageCount: null,
+              turnCount: null
+            })
+          const nativeSession = await pi.nativeSessionForBinding(binding)
+          if (!nativeSession)
+            return send({
+              working: false,
+              summary: '',
+              piWebUrl: null,
+              verified: false,
+              messageCount: null,
+              turnCount: null,
+              workspaceId: hash(binding.cwd).slice(0, 16),
+              workspaceLabel: `agent-workspace/${basename(binding.cwd)}`
+            })
+          let state = null,
+            messages = []
+          if (binding.guardVersion === 1 && binding.status === 'bound') {
+            state = await pi.request(`/api/agent/${binding.sessionId}`, {
+              type: 'get_state'
+            })
+            const history = await pi.messages(d.id)
+            const entries = history.context?.messages || history.context || []
+            messages = Array.isArray(entries)
+              ? entries.map((e) => e.message || e)
+              : []
+          }
           const latest = [...messages]
             .reverse()
             .find((m) => m.role === 'assistant')
@@ -221,10 +249,25 @@ export function createStudioServer({
                   .join('\n')
           return send({
             working: Boolean(
-              state.data?.isStreaming || state.data?.isPromptRunning
+              state?.data?.isStreaming || state?.data?.isPromptRunning
             ),
             summary: summary.slice(-600),
-            piWebUrl: pi.publicBinding(binding).piWebUrl
+            piWebUrl: pi.publicBinding(binding).piWebUrl,
+            verified: binding.guardVersion === 1 && binding.status === 'bound',
+            messageCount:
+              nativeSession.messageCount ??
+              (binding.guardVersion === 1 && binding.status === 'bound'
+                ? messages.length
+                : null),
+            turnCount: binding.guardVersion === 1 && binding.status === 'bound'
+              ? messages.filter((m) => ['user', 'human'].includes(m.role)).length
+              : null,
+            createdAt: nativeSession.created || null,
+            modifiedAt: nativeSession.modified || null,
+            firstMessage: nativeSession.firstMessage || '',
+            sessionName: nativeSession.name || '',
+            workspaceId: hash(binding.cwd).slice(0, 16),
+            workspaceLabel: `agent-workspace/${basename(binding.cwd)}`
           })
         }
         if (

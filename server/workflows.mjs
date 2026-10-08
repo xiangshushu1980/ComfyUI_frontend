@@ -106,6 +106,7 @@ export class Workflows {
       discussionId: discussion.id,
       goal: body.goal || definition.name,
       status: 'ready',
+      createdAt: new Date().toISOString(),
       closed: false
     })
   }

@@ -13,7 +13,9 @@ test('exact session must enter native catalog before returning its navigation UR
   let calls = 0,
     sent
   bridge.request = async () => ({
-    sessions: calls++ ? [{ id: 'exact' }] : [{ id: 'unrelated' }]
+    sessions: calls++
+      ? [{ id: 'exact', cwd: '/approved/workspace' }]
+      : [{ id: 'unrelated', cwd: '/other/workspace' }]
   })
   bridge.send = async (id, body) => {
     sent = { id, body }

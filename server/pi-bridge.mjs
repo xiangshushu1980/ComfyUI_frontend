@@ -1,7 +1,7 @@
 // Owner: Sean. Native PiWeb bridge with durable send/create uncertainty.
 import { readFileSync } from 'node:fs'
 import { mkdir, writeFile, copyFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { requireThat, hash } from './store.mjs'
 import { propose } from './domain.mjs'
@@ -118,11 +118,25 @@ export class PiBridge {
     return {
       ...safe,
       workspace: cwd,
+      workspaceId: hash(cwd).slice(0, 16),
+      workspaceLabel: `agent-workspace/${basename(cwd)}`,
       piWebWorkspaceUrl: `${process.env.PI_WEB_PUBLIC_URL || this.url}/?cwd=${encodeURIComponent(cwd)}`,
       piWebUrl: b.sessionId
         ? `${process.env.PI_WEB_PUBLIC_URL || this.url}/?session=${encodeURIComponent(b.sessionId)}`
         : null
     }
+  }
+  async nativeSessionForBinding(binding) {
+    const catalog = await this.request('/api/sessions')
+    const session = catalog.sessions?.find((item) => item.id === binding.sessionId)
+    if (session && session.cwd !== binding.cwd)
+      throw Object.assign(
+        new Error(
+          `PiWeb session workspace mismatch: expected ${binding.cwd}, found ${session.cwd || 'unknown'}`
+        ),
+        { status: 409 }
+      )
+    return session || null
   }
   directInput(capability, body) {
     const binding = this.authenticate(capability, body.sessionId)
@@ -199,6 +213,12 @@ export class PiBridge {
   async launch(discussionId, body) {
     let b = await this.prepareWorkspace(discussionId)
     if (b.sessionId) {
+      const nativeSession = await this.nativeSessionForBinding(b)
+      requireThat(
+        nativeSession,
+        'Cannot verify the PiWeb session workspace; refusing cross-project navigation',
+        409
+      )
       let tools
       try {
         tools = await this.request(`/api/agent/${b.sessionId}`, {
@@ -302,8 +322,8 @@ export class PiBridge {
     }
   }
   async ensureNavigable(binding) {
-    const catalog = await this.request('/api/sessions')
-    if (!catalog.sessions?.some((s) => s.id === binding.sessionId)) {
+    const session = await this.nativeSessionForBinding(binding)
+    if (!session) {
       // Pi Web deliberately excludes idle transient sessions. A recorded,
       // guarded initialization turn makes the exact session navigable.
       await this.send(binding.discussionId, {
@@ -311,8 +331,8 @@ export class PiBridge {
         text: '初始化当前业务 Workflow 会话：读取 context，简短说明当前目标及等待用户指示。此初始化不调用任何写操作、不生成、不采用、不确认。'
       })
       for (let attempt = 0; attempt < 40; attempt++) {
-        const next = await this.request('/api/sessions')
-        if (next.sessions?.some((s) => s.id === binding.sessionId))
+        const next = await this.nativeSessionForBinding(binding)
+        if (next)
           return this.publicBinding(this.store.get(binding.id))
         await new Promise((resolve) => setTimeout(resolve, 250))
       }

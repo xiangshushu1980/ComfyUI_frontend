@@ -2,7 +2,10 @@
 import { createServer } from 'node:http'
 import { homedir } from 'node:os'
 import { basename, join, resolve, extname } from 'node:path'
+import { execFile } from 'node:child_process'
 import { readFile, stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { promisify } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import { Store, hash, requireThat } from './store.mjs'
 import { createSource, propose } from './domain.mjs'
@@ -12,6 +15,25 @@ import { Workflows, definitions } from './workflows.mjs'
 import { ingestPng, thumbnail } from './media.mjs'
 import { compileQwen, verifyWorkflow } from './qwen.mjs'
 import { nativeGateway, readBody } from './gateway.mjs'
+const execFileAsync = promisify(execFile)
+
+async function openInWindowsExplorer(path) {
+  let windowsPath = path
+  if (process.platform !== 'win32') {
+    const isWsl =
+      process.env.WSL_DISTRO_NAME ||
+      existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')
+    requireThat(isWsl, 'Windows Explorer is available only from Windows or WSL')
+    const converted = await execFileAsync('wslpath', ['-w', path], {
+      timeout: 5000
+    })
+    windowsPath = converted.stdout.trim()
+  }
+  await execFileAsync('explorer.exe', [windowsPath], {
+    timeout: 10000,
+    windowsHide: true
+  })
+}
 export function createStudioServer({
   dataDir = process.env.STUDIO_DATA_DIR ||
     join(homedir(), '.local/share/entity-canvas-studio'),
@@ -315,6 +337,19 @@ export function createStudioServer({
           req.method === 'POST'
         )
           return send(pi.publicBinding(await pi.prepareWorkspace(m[1])))
+        if (
+          (m = path.match(/^\/discussions\/([^/]+)\/open-explorer$/)) &&
+          req.method === 'POST'
+        ) {
+          const discussion = store.get(m[1])
+          requireThat(discussion.kind === 'discussion', 'discussion required')
+          const binding = store
+            .list(discussion.projectId, 'pi_binding')
+            .find((item) => item.discussionId === discussion.id)
+          requireThat(binding?.cwd, 'discussion workspace is not prepared', 404)
+          await openInWindowsExplorer(binding.cwd)
+          return send({ opened: true })
+        }
         if (
           (m = path.match(/^\/discussions\/([^/]+)\/pi-session$/)) &&
           req.method === 'POST'

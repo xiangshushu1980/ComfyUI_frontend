@@ -194,7 +194,7 @@
                   navigationBusy ||
                   !hasAgentWorkspaceBinding(workspace.workspaceId)
                 "
-                @click="openAgentWorkspace(workspace)"
+                @click="openAgentWorkspaceInExplorer(workspace.workspaceId)"
               >
                 {{ workspace.workspaceLabel }} ↗
               </button>
@@ -220,8 +220,10 @@
               运行目录：
               <button
                 class="workspace-path-link"
-                :disabled="navigationBusy"
-                @click="openAgentWorkspace(workspaceForId(workspaceId))"
+                :disabled="
+                  navigationBusy || !hasAgentWorkspaceBinding(workspaceId)
+                "
+                @click="openAgentWorkspaceInExplorer(workspaceId)"
               >
                 {{ agentWorkspaceLabel(workspaceId) }} ↗
               </button>
@@ -829,15 +831,6 @@ function agentWorkspaceLabel(workspaceId?: string) {
       ?.workspaces?.find((item: Obj) => item.workspaceId === workspaceId)
       ?.workspaceLabel || '尚未关联工作区'
   )
-}
-function workspaceForId(workspaceId: string) {
-  return {
-    id: `agent-workspace:${workspaceId}`,
-    kind: 'agent_workspace',
-    revision: 1,
-    workspaceId,
-    workspaceLabel: agentWorkspaceLabel(workspaceId)
-  }
 }
 function hasAgentWorkspaceBinding(workspaceId?: string) {
   return objects.value.some(
@@ -1540,30 +1533,20 @@ async function openRunSession(run: Obj) {
   }
   await openPiWeb()
 }
-async function openAgentWorkspace(workspace: Obj) {
+async function openAgentWorkspaceInExplorer(workspaceId: string) {
   if (navigationBusy.value) return
-  const tab = window.open('about:blank', '_blank')
-  if (!tab) {
-    agentError.value = '浏览器拦截了新标签页，请允许 Studio 打开 PiWeb。'
-    return
-  }
-  tab.opener = null
+  const binding = objects.value.find(
+    (item) => item.kind === 'pi_binding' && item.workspaceId === workspaceId
+  )
+  if (!binding) return
   navigationBusy.value = true
   try {
-    const binding = objects.value.find(
-      (item) =>
-        item.kind === 'pi_binding' && item.workspaceId === workspace.workspaceId
-    )
-    if (!binding) throw new Error('这个工作区尚未绑定 PiWeb 对话。')
-    const prepared = await studioApi(
-      `/discussions/${binding.discussionId}/workspace`,
-      { requestId: requestId() }
-    )
-    if (prepared.workspaceId !== workspace.workspaceId)
-      throw new Error('工作区绑定已变化，请刷新工程后重试。')
-    tab.location.href = prepared.piWebWorkspaceUrl
+    await studioApi(`/discussions/${binding.discussionId}/open-explorer`, {
+      requestId: requestId()
+    })
+    syncMessage.value = '已在 Windows 文件资源管理器中打开工作目录。'
+    agentError.value = ''
   } catch (e) {
-    tab.close()
     agentError.value = e instanceof Error ? e.message : String(e)
   } finally {
     navigationBusy.value = false

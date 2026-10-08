@@ -31,7 +31,7 @@ export class PiBridge {
   async prepareWorkspace(discussionId) {
     const d = this.store.get(discussionId)
     requireThat(d.kind === 'discussion', 'discussion required')
-    const project = this.store.get(d.projectId)
+    const project = this.store.project(d.projectId)
     const sessionName = `${project.name} · ${d.name}`
     let binding = this.store
       .list(d.projectId, 'pi_binding')

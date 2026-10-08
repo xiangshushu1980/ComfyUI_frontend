@@ -29,6 +29,7 @@ export function installEntityExtension(pi, options = {}) {
   pi.on('session_start', async (_event, ctx) => {
     const config = getConfig(ctx)
     narrow()
+    if (config.sessionName) pi.setSessionName?.(config.sessionName)
     binding = await invoke(
       '/internal/pi/bind',
       { discussionId: config.discussionId, bindingVersion: 1, guardVersion: 1 },

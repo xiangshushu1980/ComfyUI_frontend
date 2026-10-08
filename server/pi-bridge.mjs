@@ -31,37 +31,57 @@ export class PiBridge {
   async prepareWorkspace(discussionId) {
     const d = this.store.get(discussionId)
     requireThat(d.kind === 'discussion', 'discussion required')
+    const project = this.store.get(d.projectId)
+    const sessionName = `${project.name} · ${d.name}`
     let binding = this.store
       .list(d.projectId, 'pi_binding')
       .find((b) => b.discussionId === d.id)
-    if (binding) return binding
-    const cwd = join(
-      this.dataDir,
-      'projects',
-      d.projectId,
-      'agent-workspace',
-      d.id
-    )
+    const slug = (value) =>
+      value
+        .normalize('NFKC')
+        .replace(/[^\p{L}\p{N}]+/gu, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 40) || 'workspace'
+    const cwd =
+      binding?.cwd ||
+      join(
+        this.dataDir,
+        'projects',
+        d.projectId,
+        'agent-workspace',
+        `${slug(project.name)}--${slug(d.name)}--${d.id.slice(0, 8)}`
+      )
     await mkdir(join(cwd, '.pi/extensions'), { recursive: true })
-    const capability = randomBytes(32).toString('hex')
     await copyFile(
       new URL('../pi/entity-extension.mjs', import.meta.url),
       join(cwd, '.pi/extensions/entity-studio.js')
     )
+    let capability = binding?.capability
+    const configPath = join(cwd, '.entity-studio-binding.json')
+    if (binding) {
+      try {
+        capability ||= JSON.parse(readFileSync(configPath, 'utf8')).capability
+      } catch {
+        // A missing or stale config is repaired below from the durable binding.
+      }
+    }
+    capability ||= randomBytes(32).toString('hex')
     await writeFile(
-      join(cwd, '.entity-studio-binding.json'),
+      configPath,
       JSON.stringify({
         owner: 'Sean',
         apiUrl: this.apiUrl,
         discussionId: d.id,
-        capability
+        capability,
+        sessionName
       }),
       { mode: 0o600 }
     )
     await writeFile(
       join(cwd, 'AGENTS.md'),
-      'Owner: Sean. Product creation workspace. Only entity_studio business tools are allowed. Human adoption, one-use generation and appearance confirmation remain separate. No software development or Task Center here.\n'
+      `Owner: Sean. Product creation workspace for ${sessionName}. Only entity_studio business tools are allowed. Human adoption, one-use generation and appearance confirmation remain separate. No software development or Task Center here.\n`
     )
+    if (binding) return binding
     binding = this.store.transaction(() =>
       this.store.create(d.projectId, 'pi_binding', {
         discussionId: d.id,

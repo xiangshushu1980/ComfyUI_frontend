@@ -136,7 +136,8 @@
             target="_blank"
             rel="noopener noreferrer"
             @click="markTrustEntryOpened(d.id)"
-            >在 PiWeb 打开精确工作区并信任 ↗</a
+            >在 PiWeb 打开“{{ project?.name || '当前工程' }} ·
+            {{ d.name }}”并信任 ↗</a
           >
           <a
             v-if="workspaceSessionUrl"
@@ -144,7 +145,7 @@
             target="_blank"
             rel="noopener noreferrer"
             @click="markTrustEntryOpened(d.id)"
-            >信任后重新加载此 PiWeb 会话 ↗</a
+            >重新加载“{{ project?.name || '当前工程' }} · {{ d.name }}”会话 ↗</a
           >
         </div>
       </section>
@@ -990,7 +991,7 @@ async function showWorkspaceTrustEntry(workflowId: string, session: Obj) {
     { requestId: requestId() }
   )
   if (activeWorkflowId.value !== workflowId) return
-  workspaceToTrust.value = prepared.workspace
+  workspaceToTrust.value = workflowWorkspaceLabel(workflowId)
   workspaceUrl.value = prepared.piWebWorkspaceUrl || ''
   workspaceSessionUrl.value = prepared.piWebUrl || ''
   trustEntryOpenedFor.value = ''
@@ -1000,6 +1001,10 @@ async function showWorkspaceTrustEntry(workflowId: string, session: Obj) {
 }
 function markTrustEntryOpened(workflowId: string) {
   trustEntryOpenedFor.value = workflowId
+}
+function workflowWorkspaceLabel(workflowId: string) {
+  const definition = definitions.value.find((item) => item.id === workflowId)
+  return `${project.value?.name || '当前工程'} · ${definition?.name || 'PiWeb 工作区'}`
 }
 async function openPiWeb() {
   const session = currentSession.value
@@ -1052,7 +1057,7 @@ async function navigatePiWeb(session: Obj, tab: Window | null) {
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     if (/guard|trust.*workspace/i.test(message)) {
-      workspaceToTrust.value = prepared.workspace
+      workspaceToTrust.value = workflowWorkspaceLabel(session.workflowId)
       workspaceUrl.value = prepared.piWebWorkspaceUrl || ''
       workspaceSessionUrl.value = prepared.piWebUrl || ''
       trustEntryOpenedFor.value = ''

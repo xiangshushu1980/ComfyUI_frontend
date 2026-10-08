@@ -126,9 +126,10 @@
           >
           <p v-if="agentError" class="error">{{ agentError }}</p>
           <p v-if="workspaceToTrust" class="hint">
-            点击信任后还需重新加载下面这个精确 PiWeb
-            会话，扩展才会回传验证状态。 请信任工作区，然后返回这里点“打开并验证
-            PiWeb 会话”：<br />{{ workspaceToTrust }}
+            请先在 PiWeb 信任此工程工作区，再返回这里点“打开并验证 PiWeb
+            会话”。Studio 会校验信任、初始化对话并确认它可打开：<br />{{
+              workspaceToTrust
+            }}
           </p>
           <a
             v-if="workspaceUrl"
@@ -138,14 +139,6 @@
             @click="markTrustEntryOpened(d.id)"
             >在 PiWeb 打开“{{ project?.name || '当前工程' }} ·
             {{ d.name }}”并信任 ↗</a
-          >
-          <a
-            v-if="workspaceSessionUrl"
-            :href="workspaceSessionUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            @click="markTrustEntryOpened(d.id)"
-            >重新加载“{{ project?.name || '当前工程' }} · {{ d.name }}”会话 ↗</a
           >
         </div>
       </section>
@@ -913,9 +906,9 @@ async function enterWorkflow(workflowId: string, entityId?: string) {
     return
   }
   if (canContinueAfterTrust && workspaceSessionUrl.value) {
-    // Trust is registered by PiWeb only when the exact existing session is
-    // reloaded. Calling the server launch endpoint here cannot trigger that
-    // session_start hook, so navigate directly to the previously bound session.
+    // Reload the exact session first so PiWeb's session_start hook can verify
+    // workspace trust, then let the server initialize it if it is still absent
+    // from PiWeb's conversation list.
     const tab = window.open('about:blank', '_blank')
     if (!tab) {
       agentError.value =
@@ -931,12 +924,12 @@ async function enterWorkflow(workflowId: string, entityId?: string) {
         await new Promise((resolve) => setTimeout(resolve, 500))
         await refresh()
         if (!workspaceTrustPending(workflowId)) {
-          workspaceToTrust.value = ''
-          workspaceUrl.value = ''
-          workspaceSessionUrl.value = ''
-          trustEntryOpenedFor.value = ''
-          agentError.value = '工作区信任已验证，PiWeb 会话已打开。'
-          await refreshAgent()
+          const session = workflowSession(workflowId)
+          if (!session)
+            throw new Error('Workflow 会话已变化，请重新选择后再试。')
+          agentError.value = '工作区已验证，正在初始化并确认此对话可打开…'
+          await navigatePiWeb(session, tab)
+          agentError.value = '验证完成，已打开当前 Workflow 的 PiWeb 对话。'
           return
         }
       }

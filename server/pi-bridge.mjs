@@ -16,6 +16,7 @@ export class PiBridge {
     this.dataDir = dataDir
     this.url = url
     this.apiUrl = apiUrl
+    this.workspaceLocks = new Map()
   }
   async request(path, body) {
     const r = await fetch(this.url + path, {
@@ -30,33 +31,49 @@ export class PiBridge {
   }
   async prepareWorkspace(discussionId) {
     const d = this.store.get(discussionId)
+    const prior = this.workspaceLocks.get(d.projectId) || Promise.resolve()
+    let unlock
+    const lock = new Promise((resolve) => (unlock = resolve))
+    this.workspaceLocks.set(d.projectId, lock)
+    await prior
+    try {
+      return await this.prepareWorkspaceLocked(discussionId)
+    } finally {
+      unlock()
+      if (this.workspaceLocks.get(d.projectId) === lock)
+        this.workspaceLocks.delete(d.projectId)
+    }
+  }
+  async prepareWorkspaceLocked(discussionId) {
+    const d = this.store.get(discussionId)
     requireThat(d.kind === 'discussion', 'discussion required')
     const project = this.store.project(d.projectId)
     const sessionName = `${project.name} · ${d.name}`
-    let binding = this.store
-      .list(d.projectId, 'pi_binding')
-      .find((b) => b.discussionId === d.id)
+    const bindings = this.store.list(d.projectId, 'pi_binding')
+    let binding = bindings.find((b) => b.discussionId === d.id)
     const slug = (value) =>
       value
         .normalize('NFKC')
         .replace(/[^\p{L}\p{N}]+/gu, '-')
         .replace(/^-|-$/g, '')
         .slice(0, 40) || 'workspace'
-    const cwd =
-      binding?.cwd ||
-      join(
-        this.dataDir,
-        'projects',
-        d.projectId,
-        'agent-workspace',
-        `${slug(project.name)}--${slug(d.name)}--${d.id.slice(0, 8)}`
-      )
+    const projectWorkspace = join(
+      this.dataDir,
+      'projects',
+      d.projectId,
+      'agent-workspace',
+      `${slug(project.name)}--${d.projectId.slice(0, 8)}`
+    )
+    const cwd = binding?.cwd || projectWorkspace
+    const sharedProjectWorkspace = cwd === projectWorkspace
     await mkdir(join(cwd, '.pi/extensions'), { recursive: true })
     await copyFile(
       new URL('../pi/entity-extension.mjs', import.meta.url),
       join(cwd, '.pi/extensions/entity-studio.js')
     )
-    let capability = binding?.capability
+    let capability =
+      binding?.capability ||
+      bindings.find((b) => b.cwd === projectWorkspace)?.capability
     const configPath = join(cwd, '.entity-studio-binding.json')
     if (binding) {
       try {
@@ -71,15 +88,16 @@ export class PiBridge {
       JSON.stringify({
         owner: 'Sean',
         apiUrl: this.apiUrl,
-        discussionId: d.id,
+        projectId: d.projectId,
         capability,
-        sessionName
+        projectName: project.name,
+        ...(!sharedProjectWorkspace ? { discussionId: d.id, sessionName } : {})
       }),
       { mode: 0o600 }
     )
     await writeFile(
       join(cwd, 'AGENTS.md'),
-      `Owner: Sean. Product creation workspace for ${sessionName}. Only entity_studio business tools are allowed. Human adoption, one-use generation and appearance confirmation remain separate. No software development or Task Center here.\n`
+      `Owner: Sean. Product creation workspace for ${project.name}. Workflow conversations are separate named sessions. Only entity_studio business tools are allowed. Human adoption, one-use generation and appearance confirmation remain separate. No software development or Task Center here.\n`
     )
     if (binding) return binding
     binding = this.store.transaction(() =>
@@ -238,10 +256,10 @@ export class PiBridge {
         'native session identity mismatch',
         409
       )
-      const updated = this.store.transaction(() =>
+      const attached = this.store.transaction(() =>
         this.store.update(b.id, current.revision, {
           sessionId: created.sessionId,
-          status: 'bound',
+          status: 'creating',
           error: null,
           model: created.model
         })
@@ -250,11 +268,27 @@ export class PiBridge {
         type: 'get_tools'
       })
       requireThat(
-        updated.guardVersion === 1 &&
-          JSON.stringify(tools).includes('entity_studio'),
+        JSON.stringify(tools).includes('entity_studio'),
         'Native extension guard not verified',
         503
       )
+      const updated = this.store.transaction(() =>
+        this.store.update(attached.id, attached.revision, {
+          status: 'bound',
+          guardVersion: 1,
+          error: null
+        })
+      )
+      const discussion = this.store.get(discussionId),
+        project = this.store.project(discussion.projectId)
+      try {
+        await this.request(`/api/agent/${created.sessionId}`, {
+          type: 'set_session_name',
+          name: `${project.name} · ${discussion.name}`
+        })
+      } catch {
+        // Session labels are best-effort; the shared workspace name stays readable.
+      }
       return this.ensureNavigable(updated)
     } catch (e) {
       const current = this.store.get(b.id)
@@ -296,21 +330,43 @@ export class PiBridge {
       .prepare("SELECT body FROM objects WHERE kind='pi_binding'")
       .all()
       .map((r) => JSON.parse(r.body))
-      .find((b) => b.capability === capability)
-    requireThat(
-      row && (!discussionId || row.discussionId === discussionId),
-      'invalid session capability',
-      403
-    )
-    requireThat(row.sessionId === sessionId, 'native session mismatch', 403)
+      .find(
+        (b) =>
+          b.capability === capability &&
+          b.sessionId === sessionId &&
+          (!discussionId || b.discussionId === discussionId)
+      )
+    requireThat(row, 'invalid session capability', 403)
     return row
   }
   bind(capability, body) {
-    const row = this.store.db
+    const bindings = this.store.db
       .prepare("SELECT body FROM objects WHERE kind='pi_binding'")
       .all()
       .map((r) => JSON.parse(r.body))
-      .find((b) => b.capability === capability)
+      .filter((b) => b.capability === capability)
+    if (!body.discussionId) {
+      const projectBindings = bindings.filter(
+        (b) => b.projectId === body.projectId
+      )
+      requireThat(projectBindings.length, 'invalid project capability', 403)
+      const row = projectBindings.find((b) => b.sessionId === body.sessionId)
+      if (!row) return { ok: true, projectId: body.projectId }
+      requireThat(body.guardVersion === 1, 'invalid guard')
+      const updated = this.store.transaction(() =>
+        this.store.update(row.id, row.revision, {
+          guardVersion: 1,
+          status: 'bound'
+        })
+      )
+      const discussion = this.store.get(row.discussionId),
+        project = this.store.project(row.projectId)
+      return {
+        ...updated,
+        sessionName: `${project.name} · ${discussion.name}`
+      }
+    }
+    const row = bindings.find((b) => b.discussionId === body.discussionId)
     requireThat(
       row &&
         row.discussionId === body.discussionId &&

@@ -11,7 +11,7 @@ export const definitions = [
     version: 1,
     name: '小说导入与分章',
     target: 'project',
-    operations: ['structure_novel']
+    operations: ['structure_novel', 'refine_chapters']
   },
   {
     id: 'ExtractEntities',
@@ -247,6 +247,114 @@ export class Workflows {
     for (const chapter of chapters)
       this.relation(projectId, source.id, chapter.id, 'contains')
     return { source, chapters }
+  }
+  refineChapters(sessionId, body) {
+    const session = this.session(sessionId)
+    requireThat(
+      session.workflowId === 'StructureNovel',
+      'use 小说导入与分章 Workflow',
+      403
+    )
+    const source = this.store.sameProject(
+      body.sourceId,
+      session.projectId,
+      'source'
+    )
+    requireThat(
+      body.sourceRevision === source.revision,
+      'source revision changed; reload before refining chapters',
+      409
+    )
+    requireThat(
+      Array.isArray(body.chapters) &&
+        body.chapters.length > 0 &&
+        body.chapters.length <= 500,
+      'chapters must contain 1..500 entries'
+    )
+    const anchors = source.anchors || []
+    requireThat(anchors.length > 0, 'source has no paragraph anchors')
+    let nextAnchorIndex = 0
+    const spans = body.chapters.map((chapter, order) => {
+      const startIndex = anchors.findIndex(
+        (anchor) => anchor.id === chapter.startAnchorId
+      )
+      const endIndex = anchors.findIndex(
+        (anchor) => anchor.id === chapter.endAnchorId
+      )
+      requireThat(
+        typeof chapter.name === 'string' &&
+          chapter.name.trim().length > 0 &&
+          chapter.name.trim().length <= 160,
+        `chapter ${order + 1} requires a name`
+      )
+      requireThat(
+        startIndex === nextAnchorIndex && endIndex >= startIndex,
+        `chapter ${order + 1} must start at the next uncovered source anchor`,
+        409
+      )
+      const range = anchors.slice(startIndex, endIndex + 1)
+      nextAnchorIndex = endIndex + 1
+      return {
+        name: chapter.name.trim(),
+        start: range[0].start,
+        end: range.at(-1).end,
+        order,
+        sourceId: source.id,
+        sourceRevision: source.revision,
+        anchorIds: range.map((anchor) => anchor.id),
+        contentHash: hash(source.text.slice(range[0].start, range.at(-1).end)),
+        brief: typeof chapter.brief === 'string' ? chapter.brief.trim() : ''
+      }
+    })
+    requireThat(
+      nextAnchorIndex === anchors.length,
+      'chapter ranges must cover every source anchor exactly once',
+      409
+    )
+
+    const oldChapters = this.store
+      .list(session.projectId, 'chapter')
+      .filter(
+        (chapter) => chapter.sourceId === source.id && !chapter.supersededBy
+      )
+    const usedIds = new Set()
+    const chapters = spans.map((fields) => {
+      const best = oldChapters
+        .filter((chapter) => !usedIds.has(chapter.id))
+        .map((chapter) => ({
+          chapter,
+          overlap: Math.max(
+            0,
+            Math.min(chapter.end, fields.end) -
+              Math.max(chapter.start, fields.start)
+          )
+        }))
+        .sort((a, b) => b.overlap - a.overlap)[0]
+      if (!best?.overlap)
+        return this.store.create(session.projectId, 'chapter', fields)
+      usedIds.add(best.chapter.id)
+      return this.store.update(best.chapter.id, best.chapter.revision, fields)
+    })
+    for (const chapter of chapters)
+      this.relation(session.projectId, source.id, chapter.id, 'contains')
+
+    const supersededChapterIds = []
+    for (const old of oldChapters) {
+      if (usedIds.has(old.id)) continue
+      const replacement = chapters
+        .map((chapter) => ({
+          chapter,
+          overlap: Math.max(
+            0,
+            Math.min(old.end, chapter.end) - Math.max(old.start, chapter.start)
+          )
+        }))
+        .sort((a, b) => b.overlap - a.overlap)[0]?.chapter
+      if (!replacement) continue
+      this.store.update(old.id, old.revision, { supersededBy: replacement.id })
+      supersededChapterIds.push(old.id)
+    }
+    return { source, chapters, supersededChapterIds }
   }
   relation(projectId, fromId, toId, type) {
     this.store.sameProject(fromId, projectId)
@@ -718,6 +826,8 @@ export class Workflows {
     return this.store.write(`workflow:${sessionId}:${operation}`, body, () => {
       if (operation === 'structure_novel')
         return this.structure(s.projectId, body)
+      if (operation === 'refine_chapters')
+        return this.refineChapters(sessionId, body)
       if (operation === 'propose_entities')
         return this.proposeEntities(sessionId, body)
       if (operation === 'add_reference')

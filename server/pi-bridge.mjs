@@ -665,7 +665,7 @@ export class PiBridge {
         tools: {
           workflow_operation: {
             operation:
-              'structure_novel | propose_entities | add_reference | generate_concepts | generate_threeview',
+              'structure_novel | refine_chapters | propose_entities | add_reference | generate_concepts | generate_threeview',
             parameters: {
               requestId: 'unique key',
               chapterId: 'propose_entities: chapter UUID',
@@ -681,7 +681,11 @@ export class PiBridge {
               steps: 'optional integer 1..50, default 25',
               referenceIds:
                 'optional ordered image asset UUIDs; omitted uses entity reference resources',
-              sourceId: 'structure_novel: existing source UUID'
+              sourceId: 'structure_novel: existing source UUID',
+              sourceRevision:
+                'refine_chapters: revision returned by read_source',
+              chapters:
+                'refine_chapters: ordered [{name,startAnchorId,endAnchorId,brief?}]; cover every source anchor exactly once'
             },
             scope: workflowSession?.workflowId || 'enter Workflow first'
           },
@@ -697,7 +701,11 @@ export class PiBridge {
           },
           view_image: { assetId: 'UUID; requires verified image model' },
           context: {},
-          read_source: { id: 'sourceId', anchorId: 'P1' },
+          read_source: {
+            id: 'sourceId',
+            anchorId: 'optional paragraph ID; omit for paged anchor index',
+            offset: 'optional anchor index offset; pages of 100'
+          },
           read_entity: { id: 'objectId', revision: 1 },
           load_method: { name: 'qwen-concept' },
           propose: {
@@ -758,13 +766,38 @@ export class PiBridge {
       let result = obj
       if (body.tool === 'read_source') {
         requireThat(o.kind === 'source', 'source required')
-        const a = o.anchors.find((a) => a.id === args.anchorId)
-        requireThat(a, 'anchor required')
-        result = {
-          id: o.id,
-          revision: o.revision,
-          anchor: a,
-          text: o.text.slice(a.start, a.end)
+        if (args.anchorId) {
+          const a = o.anchors.find((a) => a.id === args.anchorId)
+          requireThat(a, 'anchor not found')
+          result = {
+            id: o.id,
+            revision: o.revision,
+            anchor: a,
+            text: o.text.slice(a.start, a.end)
+          }
+        } else {
+          const offset = args.offset ?? 0
+          requireThat(
+            Number.isInteger(offset) &&
+              offset >= 0 &&
+              offset <= o.anchors.length,
+            'invalid source anchor offset'
+          )
+          const pageSize = 100
+          const anchors = o.anchors
+            .slice(offset, offset + pageSize)
+            .map(({ id, start, end }) => ({ id, start, end }))
+          result = {
+            id: o.id,
+            name: o.name,
+            revision: o.revision,
+            offset,
+            nextOffset:
+              offset + anchors.length < o.anchors.length
+                ? offset + anchors.length
+                : null,
+            anchors
+          }
         }
       }
       this.store.transaction(() =>

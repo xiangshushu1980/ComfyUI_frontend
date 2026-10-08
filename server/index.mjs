@@ -19,17 +19,31 @@ const execFileAsync = promisify(execFile)
 
 async function openInWindowsExplorer(path) {
   let windowsPath = path
+  let explorerPath
   if (process.platform !== 'win32') {
     const isWsl =
       process.env.WSL_DISTRO_NAME ||
       existsSync('/proc/sys/fs/binfmt_misc/WSLInterop')
     requireThat(isWsl, 'Windows Explorer is available only from Windows or WSL')
-    const converted = await execFileAsync('wslpath', ['-w', path], {
+    const pathConverter = '/usr/bin/wslpath'
+    const converted = await execFileAsync(pathConverter, ['-w', path], {
       timeout: 5000
     })
     windowsPath = converted.stdout.trim()
+    const windowsRoot = (process.env.WINDIR || 'C:\\Windows').replace(
+      /[\\/]+$/,
+      ''
+    )
+    const explorer = await execFileAsync(pathConverter, [
+      '-u',
+      `${windowsRoot}\\explorer.exe`
+    ])
+    explorerPath = explorer.stdout.trim()
+  } else {
+    explorerPath = join(process.env.WINDIR || 'C:\\Windows', 'explorer.exe')
   }
-  await execFileAsync('explorer.exe', [windowsPath], {
+  requireThat(existsSync(explorerPath), 'Windows Explorer executable not found')
+  await execFileAsync(explorerPath, [windowsPath], {
     timeout: 10000,
     windowsHide: true
   })

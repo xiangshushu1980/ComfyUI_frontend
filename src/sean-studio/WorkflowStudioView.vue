@@ -25,8 +25,7 @@
         <option v-for="p in projects" :key="p.id" :value="p.id">
           {{ p.name }}
         </option></select
-      ><button @click="newProject">＋ 新建工程</button> <label>长期数据</label
-      ><button @click="importing = true">＋ 导入整本小说</button>
+      ><button @click="newProject">＋ 新建工程</button> <label>长期数据</label>
       <label>实体</label
       ><button
         v-for="entity in entities"
@@ -128,10 +127,12 @@
         <div v-if="!objects.length && canvasMode === 'story'" class="empty">
           <h1>从故事到形象</h1>
           <p>
-            导入小说，进入实体提取 Workflow。<br />Agent 在 PiWeb
-            持续工作，结果回到画布。
+            先在“小说导入与分章”工作流中导入小说，再让 Agent 接续处理。<br />
+            结果会回到此画布。
           </p>
-          <button class="primary" @click="importing = true">导入小说</button>
+          <button class="primary" @click="openNovelWorkflow">
+            前往小说导入与分章 ↗
+          </button>
         </div>
         <div v-if="canvasMode === 'story' && runs.length" class="run-overlay">
           <div class="overlay-title">
@@ -215,6 +216,31 @@
             {{ selected.target === 'entity' ? '实体级工作流' : '工程级工作流' }}
           </p>
           <p>{{ selected.sessionCount }} 个独立对话</p>
+          <template v-if="selected.workflowId === 'StructureNovel'">
+            <h3>小说导入与分章</h3>
+            <button
+              class="primary"
+              :disabled="!projectId"
+              @click="openNovelImport"
+            >
+              ＋ 导入并分章
+            </button>
+            <p v-if="!sourceObjects.length">
+              尚无原文。导入后自动识别章节标题。
+            </p>
+            <div v-for="source in sourceObjects" :key="source.id">
+              <p>
+                {{ source.name }} · {{ sourceChapterCount(source.id) }} 个章节
+              </p>
+              <button
+                v-if="sourceChapterCount(source.id) === 0"
+                @click="structureSource(source)"
+              >
+                按标题识别章节
+              </button>
+              <small v-else>可新建对话，让 Agent 检查并调整分章</small>
+            </div>
+          </template>
           <div v-for="workspaceId in selected.workspaceIds" :key="workspaceId">
             <p>
               运行目录：
@@ -353,12 +379,12 @@
           </p>
           <pre>{{ chapterText(selected) }}</pre>
         </template>
-        <template v-if="selected.kind === 'source'"
-          ><p>原文来源 · {{ selected.anchors?.length }} 段</p>
-          <button @click="structureSource(selected)">
-            结构化为章节
-          </button></template
-        >
+        <template v-if="selected.kind === 'source'">
+          <p>
+            原文来源 · {{ selected.anchors?.length }} 段。章节识别与调整请在
+            “小说导入与分章”工作流中操作。
+          </p>
+        </template>
         <template v-if="selected.kind === 'entity'"
           ><h3>参考元素</h3>
           <textarea
@@ -596,6 +622,9 @@ const entities = computed(() =>
   ),
   resources = computed(() =>
     objects.value.filter((o) => o.kind === 'resource')
+  ),
+  sourceObjects = computed(() =>
+    objects.value.filter((o) => o.kind === 'source')
   ),
   sessions = computed(() =>
     objects.value.filter((o) => o.kind === 'workflow_session')
@@ -1058,6 +1087,28 @@ function nodePreview(o: Obj) {
 function toggleCanvasMode() {
   switchCanvasMode(canvasMode.value === 'story' ? 'agents' : 'story')
 }
+async function openNovelWorkflow() {
+  if (!projectId.value) {
+    showError(new Error('请先选择影片工程'))
+    return
+  }
+  switchCanvasMode('agents')
+  await nextTick()
+  const workflow = agentGraphNodes.value.find(
+    (node) =>
+      node.kind === 'workflow_agent' && node.workflowId === 'StructureNovel'
+  )
+  if (workflow) select(workflow)
+}
+function openNovelImport() {
+  if (!projectId.value) {
+    agentError.value = '请先选择影片工程。'
+    return
+  }
+  novelName.value = ''
+  novelText.value = ''
+  importing.value = true
+}
 function switchCanvasMode(mode: 'story' | 'agents') {
   canvasMode.value = mode
   localStorage.setItem('sean-studio-canvas-mode', mode)
@@ -1101,6 +1152,14 @@ function chapterText(c: Obj) {
     c.brief ||
     '此历史章节尚未绑定原文；请先结构化小说。'
   )
+}
+function sourceChapterCount(sourceId: string) {
+  return objects.value.filter(
+    (object) =>
+      object.kind === 'chapter' &&
+      object.sourceId === sourceId &&
+      !object.supersededBy
+  ).length
 }
 async function loadNovelFile(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]

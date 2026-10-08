@@ -1,7 +1,7 @@
 // Owner: Sean. Navigation scope tests use no private data or browser/GPU service.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { hitCanvasNode, objectHierarchy, objectPath, projectScope, readRoute, routeHash } from '../src/sean-studio/canvasNavigation.ts'
+import { canDrill, hitCanvasNode, objectHierarchy, objectPath, projectScope, readRoute, routeHash } from '../src/sean-studio/canvasNavigation.ts'
 const objects = [
   { id: 'novel', kind: 'source' },
   { id: 'chapter', kind: 'chapter', sourceId: 'novel', name: '第一章', order: 0 },
@@ -14,17 +14,17 @@ const objects = [
   { id: 'run', kind: 'workflow_run', outputs: ['asset'] }
 ]
 const ids = (scope) => projectScope(objects, scope).map((o) => o.id)
-test('drilling hides current container, ancestors and other branches', () => {
+test('drilling retains current node and hides ancestors and other branches', () => {
   assert.deepEqual(objectPath('section', objectHierarchy(objects)), ['novel', 'chapter', 'section'])
-  assert.deepEqual(ids('chapter'), ['section', 'scene', 'entity', 'image'])
-  assert.deepEqual(ids('section'), ['scene', 'entity', 'image'])
-  assert.deepEqual(ids('scene'), [])
+  assert.deepEqual(ids('chapter'), ['chapter', 'section', 'scene', 'entity', 'image'])
+  assert.deepEqual(ids('section'), ['section', 'scene', 'entity', 'image'])
+  assert.deepEqual(ids('scene'), ['scene'])
   assert.deepEqual(ids('missing'), [])
 })
-test('all entity resources and run outputs share navigation without parent nodes', () => {
-  assert.deepEqual(ids('entity'), ['image', 'reference'])
-  assert.deepEqual(ids('run'), ['image'])
-  assert.deepEqual(ids('image'), [])
+test('all entity resources and run outputs retain the current node', () => {
+  assert.deepEqual(ids('entity'), ['entity', 'image', 'reference'])
+  assert.deepEqual(ids('run'), ['image', 'run'])
+  assert.deepEqual(ids('image'), ['image'])
   assert.ok(ids('').includes('novel'))
 })
 test('refresh and browser history routes preserve exact project and contextual path', () => {
@@ -37,7 +37,7 @@ test('refresh and browser history routes preserve exact project and contextual p
 test('legacy cyclic parents cannot trap navigation', () => {
   const cyclic = [{ id: 'a', kind: 'scene', parentId: 'b' }, { id: 'b', kind: 'scene', parentId: 'a' }]
   assert.deepEqual(objectPath('a', objectHierarchy(cyclic)), ['b', 'a'])
-  assert.deepEqual(projectScope(cyclic, 'a'), [])
+  assert.deepEqual(projectScope(cyclic, 'a'), [cyclic[0]])
 })
 
 test('rapid drill hit detection uses current drawn geometry and includes titles', () => {
@@ -49,6 +49,11 @@ test('rapid drill hit detection uses current drawn geometry and includes titles'
 })
 test('scene drill follows shared entity references without showing scene or chapter parents', () => {
   const shared = [...objects, { id: 'reference-edge', kind: 'data_relation', fromId: 'scene', toId: 'entity', type: 'references' }]
-  assert.deepEqual(projectScope(shared, 'scene').map((o) => o.id), ['entity', 'image'])
-  assert.deepEqual(projectScope(shared, 'entity').map((o) => o.id), ['image', 'reference'])
+  assert.deepEqual(projectScope(shared, 'scene').map((o) => o.id), ['scene', 'entity', 'image'])
+  assert.deepEqual(projectScope(shared, 'entity').map((o) => o.id), ['entity', 'image', 'reference'])
+})
+
+test('only nodes with descendant or related content can drill', () => {
+  for (const id of ['novel', 'chapter', 'section', 'entity', 'run']) assert.equal(canDrill(objects, id), true, id)
+  for (const id of ['other', 'scene', 'image', 'reference', 'missing']) assert.equal(canDrill(objects, id), false, id)
 })

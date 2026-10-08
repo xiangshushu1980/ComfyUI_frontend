@@ -119,10 +119,13 @@ export function projectScope<T extends CanvasObject>(
       )
     )
       related.add(entity.id)
-  // Hide every location ancestor, including the current container itself.
-  const excluded = new Set(scope ? objectPath(scope.id, parents) : [])
+  // Retain the current node as context; hide only its ancestors.
+  const excluded = new Set(
+    scope ? objectPath(scope.id, parents).slice(0, -1) : []
+  )
   return objects.filter((o) => {
     if (excluded.has(o.id) || o.supersededBy) return false
+    if (scope && o.id === scope.id) return true
     if (o.kind === 'proposal')
       return (
         o.status === 'pending' &&
@@ -174,4 +177,12 @@ export function hitCanvasNode<
       y >= node.pos[1] - 32 &&
       y <= node.pos[1] + node.size[1]
   )
+}
+
+export function canDrill(
+  objects: CanvasObject[],
+  id: string,
+  showAllResources = false
+) {
+  return projectScope(objects, id, showAllResources).some((o) => o.id !== id)
 }

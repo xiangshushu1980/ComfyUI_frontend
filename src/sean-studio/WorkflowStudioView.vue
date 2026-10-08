@@ -125,13 +125,14 @@
           >
         </div>
       </section>
-      <label>长期数据</label><button @click="clearFocus">◈ 工程首页</button
+      <label>长期数据</label
       ><button @click="importing = true">＋ 导入整本小说</button>
       <label>实体</label
       ><button
         v-for="entity in entities"
         :key="entity.id"
-        @click="select(entity, false)"
+        @click="queueInspect(entity, $event)"
+        @dblclick="drillInto(entity, false)"
       >
         ◇ {{ entity.name }}<small>{{ kindName(entity.type) }}</small>
       </button>
@@ -145,45 +146,27 @@
     </aside>
     <main>
       <nav class="canvas-navigation" aria-label="画布导航">
-        <button
-          :disabled="!navigationPath.length"
-          @click="navigatePath(navigationPath.slice(0, -1))"
-        >
-          ← 返回上一级
-        </button>
         <div class="navigation-location">
           <div class="breadcrumbs" aria-label="当前位置">
-            <button
-              :aria-current="!navigationPath.length ? 'page' : undefined"
-              @click="clearFocus"
-            >
-              {{ project?.name || '工程' }}
-            </button>
+            <span :aria-current="!navigationPath.length ? 'page' : undefined">{{
+              project?.name || '工程'
+            }}</span>
             <template v-for="(id, index) in navigationPath" :key="id">
               <span aria-hidden="true">/</span>
-              <button
+              <span
                 :aria-current="
                   index === navigationPath.length - 1 ? 'page' : undefined
                 "
                 :title="
                   objectById(id)?.name || kindName(objectById(id)?.kind || '')
                 "
-                @click="navigatePath(navigationPath.slice(0, index + 1))"
-              >
-                {{
+                >{{
                   objectById(id)?.name || kindName(objectById(id)?.kind || '')
-                }}
-              </button>
+                }}</span
+              >
             </template>
           </div>
-          <small
-            >{{ visibleObjects.length }} 个当前对象 · {{ chapters.length }} 章节
-            · {{ entities.length }} 实体 · {{ resources.length }} 资源</small
-          >
         </div>
-        <button v-if="currentObject" @click="selected = currentObject">
-          当前对象详情
-        </button>
         <button @click="fit">适配画布</button>
       </nav>
       <div ref="canvasHost" class="canvas-host">
@@ -199,9 +182,6 @@
           </p>
           <button v-if="currentObject" @click="selected = currentObject">
             查看当前对象详情
-          </button>
-          <button @click="navigatePath(navigationPath.slice(0, -1))">
-            返回上一级
           </button>
         </div>
         <div v-if="!objects.length" class="empty">
@@ -223,7 +203,8 @@
             v-for="run in overlayRuns"
             :key="run.id"
             :class="['run-chip', { active: activeRun(run) }]"
-            @click="select(run)"
+            @click="queueInspect(run, $event)"
+            @dblclick="drillInto(run)"
           >
             <span>{{
               run.status === 'failed' ? '!' : activeRun(run) ? '◉' : '✓'
@@ -261,8 +242,8 @@
         >
         <template v-if="selected.kind === 'entity'"
           ><button class="primary" @click="enterWorkflow('CreateEntity')">
-            进入实体创建 Workflow ↗</button
-          ><button @click="expandSelectedEntity">展开实体资源</button>
+            进入实体创建 Workflow ↗
+          </button>
           <h3>参考元素</h3>
           <textarea
             v-model="referenceText"
@@ -399,6 +380,7 @@ import { toNodeId } from '@/types/nodeId'
 import NativeWorkflow from './NativeWorkflow.vue'
 import { requestId, studioApi } from './api'
 import {
+  canDrill,
   hitCanvasNode,
   objectHierarchy,
   objectPath,
@@ -461,13 +443,12 @@ const focusId = computed(() => navigationPath.value.at(-1) || '')
 const currentObject = computed(() => objectById(focusId.value))
 const visibleObjects = computed(() =>
   projectScope(objects.value, focusId.value, showAllResources.value).filter(
-    (o) => !navigationPath.value.includes(o.id)
+    (o) => !navigationPath.value.slice(0, -1).includes(o.id)
   )
 )
-const chapters = computed(() =>
-    objects.value.filter((o) => o.kind === 'chapter' && !o.supersededBy)
+const entities = computed(() =>
+    objects.value.filter((o) => o.kind === 'entity')
   ),
-  entities = computed(() => objects.value.filter((o) => o.kind === 'entity')),
   resources = computed(() =>
     objects.value.filter((o) => o.kind === 'resource')
   ),
@@ -517,6 +498,7 @@ let graph: LGraph,
   events: EventSource | undefined,
   poll: ReturnType<typeof setInterval> | undefined,
   viewTimer: ReturnType<typeof setTimeout> | undefined,
+  inspectTimer: ReturnType<typeof setTimeout> | undefined,
   refreshing = false
 let pointerStart: { x: number; y: number } | undefined
 let pointerDragged = false
@@ -635,6 +617,7 @@ function writeRoute() {
   if (location.hash !== hash) history.pushState(null, '', hash)
 }
 function navigatePath(path: string[], updateUrl = true) {
+  clearTimeout(inspectTimer)
   rememberView()
   navigationPath.value = path
   const object = objectById(path.at(-1) || '')
@@ -646,9 +629,20 @@ function navigatePath(path: string[], updateUrl = true) {
   projectGraph()
   restoreView()
 }
-function select(o: Obj, contextual = true) {
-  if (focusId.value === o.id) {
-    selected.value = o
+function select(o: Obj) {
+  selected.value = o
+}
+function queueInspect(o: Obj, event: MouseEvent) {
+  clearTimeout(inspectTimer)
+  if (event.detail < 2) inspectTimer = setTimeout(() => select(o), 300)
+}
+function drillInto(o: Obj, contextual = true) {
+  clearTimeout(inspectTimer)
+  if (
+    focusId.value === o.id ||
+    !canDrill(objects.value, o.id, showAllResources.value)
+  ) {
+    select(o)
     return
   }
   const existing = navigationPath.value.indexOf(o.id)
@@ -668,8 +662,11 @@ function selectOutput(id: string) {
   const o = resources.value.find((r) => r.assetId === id) || objectById(id)
   if (o) select(o)
 }
-function clearFocus() {
-  navigatePath([])
+function mouseHistory(event: MouseEvent) {
+  if (event.button !== 3 && event.button !== 4) return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  if (event.type === 'pointerup') history.go(event.button === 3 ? -1 : 1)
 }
 async function restoreRoute() {
   const route = readRoute(location.hash)
@@ -824,9 +821,6 @@ async function enterWorkflow(workflowId: string, entityId?: string) {
   } finally {
     navigationBusy.value = false
   }
-}
-function expandSelectedEntity() {
-  if (selected.value) select(selected.value)
 }
 async function openPiWeb() {
   const session = currentSession.value
@@ -1142,8 +1136,8 @@ function projectGraph() {
             o.brief ||
             o.status ||
             (['source', 'chapter', 'scene', 'entity'].includes(o.kind)
-              ? '点击进入下级内容'
-              : '点击查看详情')
+              ? '单击查看 · 有下级可双击'
+              : '单击查看详情')
           ).slice(0, 24),
           14,
           76
@@ -1264,6 +1258,7 @@ onMounted(async () => {
   resizeObserver = new ResizeObserver(resize)
   resizeObserver.observe(canvasHost.value!)
   canvasElement.value!.addEventListener('pointerdown', (event) => {
+    clearTimeout(inspectTimer)
     pointerStart = { x: event.clientX, y: event.clientY }
     pointerDragged = false
   })
@@ -1278,17 +1273,28 @@ onMounted(async () => {
       pointerDragged = true
   })
   canvasElement.value!.addEventListener('click', (event) => {
-    if (pointerDragged) return
+    if (pointerDragged || event.button !== 0) return
     const [x, y] = canvas.convertEventToCanvasOffset(event)
     const node = hitCanvasNode(graph.nodes, x, y)
     if (node) {
       const object = objectById(String(node.id))
-      if (object) select(object)
+      if (object) queueInspect(object, event)
     }
+  })
+  canvasElement.value!.addEventListener('dblclick', (event) => {
+    clearTimeout(inspectTimer)
+    if (pointerDragged || event.button !== 0) return
+    const [x, y] = canvas.convertEventToCanvasOffset(event)
+    const node = hitCanvasNode(graph.nodes, x, y)
+    const object = node && objectById(String(node.id))
+    if (object) drillInto(object)
   })
   canvasElement.value!.addEventListener('pointerup', saveView)
   canvasElement.value!.addEventListener('wheel', saveView)
   window.addEventListener('popstate', restoreRoute)
+  window.addEventListener('pointerdown', mouseHistory, true)
+  window.addEventListener('pointerup', mouseHistory, true)
+  window.addEventListener('auxclick', mouseHistory, true)
   poll = setInterval(() => void refreshAgent(), 5000)
   try {
     projects.value = await studioApi('/projects')
@@ -1300,8 +1306,12 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', restoreRoute)
+  window.removeEventListener('pointerdown', mouseHistory, true)
+  window.removeEventListener('pointerup', mouseHistory, true)
+  window.removeEventListener('auxclick', mouseHistory, true)
   events?.close()
   clearInterval(poll)
+  clearTimeout(inspectTimer)
   clearTimeout(viewTimer)
   resizeObserver?.disconnect()
   canvas?.stopRendering()
@@ -1464,7 +1474,7 @@ nav small {
   overflow-x: auto;
   max-width: 100%;
 }
-.breadcrumbs button {
+.breadcrumbs > span {
   flex-shrink: 0;
   max-width: 200px;
   overflow: hidden;

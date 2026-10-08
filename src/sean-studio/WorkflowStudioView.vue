@@ -47,7 +47,9 @@
           {{
             navigationBusy && activeWorkflowId === d.id
               ? '正在打开…'
-              : '继续 PiWeb ↗'
+              : workspaceTrustPending(d.id)
+                ? '查看信任入口'
+                : '继续 PiWeb ↗'
           }}
         </button>
         <div v-if="activeWorkflowId === d.id" class="workflow-details">
@@ -114,14 +116,15 @@
           >
           <p v-if="agentError" class="error">{{ agentError }}</p>
           <p v-if="workspaceToTrust" class="hint">
-            此 Workflow 的精确工作区尚需信任：<br />{{ workspaceToTrust }}
+            此 Workflow 的精确工作区尚需信任。请打开下方入口，在 PiWeb
+            明确信任并加载该工作区后，返回这里继续：<br />{{ workspaceToTrust }}
           </p>
           <a
             v-if="workspaceUrl"
             :href="workspaceUrl"
             target="_blank"
             rel="noopener noreferrer"
-            >前往 PiWeb 工作区设置 ↗</a
+            >在 PiWeb 打开精确工作区并信任 ↗</a
           >
         </div>
       </section>
@@ -796,14 +799,21 @@ function workflowSession(workflowId: string) {
       !s.closed
   )
 }
+function workflowBinding(workflowId: string) {
+  const session = workflowSession(workflowId)
+  return session
+    ? objects.value.find(
+        (b) =>
+          b.kind === 'pi_binding' && b.discussionId === session.discussionId
+      )
+    : undefined
+}
+function workspaceTrustPending(workflowId: string) {
+  return workflowBinding(workflowId)?.status === 'guard_unverified'
+}
 function workflowStatus(workflowId: string) {
   const session = workflowSession(workflowId)
-  const binding =
-    session &&
-    objects.value.find(
-      (b) => b.kind === 'pi_binding' && b.discussionId === session.discussionId
-    )
-  if (binding?.status === 'guard_unverified') return '工作区待信任 / 加载'
+  if (workspaceTrustPending(workflowId)) return '工作区待信任'
   if (session)
     return agentStates.value[session.id]?.working
       ? '正在工作'
@@ -840,6 +850,14 @@ async function selectWorkflow(workflowId: string) {
     await refresh()
     if (projectId.value === project && activeWorkflowId.value === workflowId)
       sessionId.value = session.id
+    if (
+      projectId.value === project &&
+      activeWorkflowId.value === workflowId &&
+      workspaceTrustPending(workflowId)
+    ) {
+      await showWorkspaceTrustEntry(workflowId, session)
+      return
+    }
     await refreshAgent()
   } catch (e) {
     if (activeWorkflowId.value === workflowId)
@@ -861,6 +879,23 @@ async function enterWorkflow(workflowId: string, entityId?: string) {
     agentError.value = '请先选择工程及目标实体'
     return
   }
+  const existingSession = workflowSession(workflowId)
+  if (existingSession && workspaceTrustPending(workflowId)) {
+    navigationBusy.value = true
+    try {
+      await refresh()
+      const latestSession = workflowSession(workflowId)
+      if (latestSession && workspaceTrustPending(workflowId)) {
+        await showWorkspaceTrustEntry(workflowId, latestSession)
+        return
+      }
+    } catch (e) {
+      agentError.value = e instanceof Error ? e.message : String(e)
+      return
+    } finally {
+      navigationBusy.value = false
+    }
+  }
   // Reserve the tab inside the user gesture, before any asynchronous operation.
   const tab = window.open('about:blank', '_blank')
   navigationBusy.value = true
@@ -876,11 +911,36 @@ async function enterWorkflow(workflowId: string, entityId?: string) {
     navigationBusy.value = false
   }
 }
+async function showWorkspaceTrustEntry(workflowId: string, session: Obj) {
+  const prepared = await studioApi(
+    `/discussions/${session.discussionId}/workspace`,
+    { requestId: requestId() }
+  )
+  if (activeWorkflowId.value !== workflowId) return
+  workspaceToTrust.value = prepared.workspace
+  workspaceUrl.value = prepared.piWebWorkspaceUrl || ''
+  agentError.value = workspaceUrl.value
+    ? '先在 PiWeb 信任并加载该精确工作区，再返回此处继续。'
+    : '无法生成工作区信任入口，请稍后重试。'
+}
 async function openPiWeb() {
   const session = currentSession.value
   if (!session || navigationBusy.value) return
   activeWorkflowId.value = session.workflowId
   workflowTargets.value[session.workflowId] = session.targetId
+  if (workspaceTrustPending(session.workflowId)) {
+    try {
+      await refresh()
+      const latestSession = workflowSession(session.workflowId)
+      if (latestSession && workspaceTrustPending(session.workflowId)) {
+        await showWorkspaceTrustEntry(session.workflowId, latestSession)
+        return
+      }
+    } catch (e) {
+      agentError.value = e instanceof Error ? e.message : String(e)
+      return
+    }
+  }
   const tab = window.open('about:blank', '_blank')
   navigationBusy.value = true
   try {

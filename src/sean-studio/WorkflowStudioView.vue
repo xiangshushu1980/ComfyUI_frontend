@@ -394,6 +394,7 @@
 // Owner: Sean. Durable business objects and runtime overlays are separate projections.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { LGraph, LGraphCanvas, LGraphNode } from '@/lib/litegraph/src/litegraph'
+import type { Rect } from '@/lib/litegraph/src/interfaces'
 import { toNodeId } from '@/types/nodeId'
 import NativeWorkflow from './NativeWorkflow.vue'
 import { requestId, studioApi } from './api'
@@ -526,6 +527,7 @@ let graph: LGraph,
   inspectTimer: ReturnType<typeof setTimeout> | undefined,
   invalidGlowTimer: ReturnType<typeof setTimeout> | undefined,
   refreshing = false
+const logicalCanvasViewport: Rect = [0, 0, 0, 0]
 let pointerStart: { x: number; y: number } | undefined
 let pointerDragged = false
 function showError(e: unknown) {
@@ -1263,7 +1265,15 @@ function projectGraph() {
 function resize() {
   if (!canvasHost.value || !canvas) return
   const rect = canvasHost.value.getBoundingClientRect()
-  canvas.resize(rect.width, rect.height)
+  logicalCanvasViewport[2] = rect.width
+  logicalCanvasViewport[3] = rect.height
+  const scale = window.devicePixelRatio || 1
+  canvas.resize(Math.round(rect.width * scale), Math.round(rect.height * scale))
+  // LiteGraph uses the backing bitmap dimensions for its visible graph area.
+  // Keep that calculation in CSS pixels while rendering both layers at DPR.
+  canvas.ds.computeVisibleArea(logicalCanvasViewport)
+  canvas.ctx.setTransform(scale, 0, 0, scale, 0, 0)
+  canvas.bgcanvas.getContext('2d')?.setTransform(scale, 0, 0, scale, 0, 0)
   canvas.setDirty(true, true)
 }
 function saveView() {
@@ -1275,6 +1285,8 @@ onMounted(async () => {
   document.title = 'Story Studio · Sean'
   graph = new LGraph()
   canvas = new LGraphCanvas(canvasElement.value!, graph)
+  const computeVisibleArea = canvas.ds.computeVisibleArea.bind(canvas.ds)
+  canvas.ds.computeVisibleArea = () => computeVisibleArea(logicalCanvasViewport)
   canvas.read_only = true
   canvas.allow_interaction = false
   canvas.show_info = false
@@ -1334,6 +1346,7 @@ onMounted(async () => {
   }
   resizeObserver = new ResizeObserver(resize)
   resizeObserver.observe(canvasHost.value!)
+  window.addEventListener('resize', resize)
   canvasElement.value!.addEventListener('pointerdown', (event) => {
     clearTimeout(inspectTimer)
     pointerStart = { x: event.clientX, y: event.clientY }
@@ -1411,6 +1424,7 @@ onBeforeUnmount(() => {
   clearTimeout(invalidGlowTimer)
   clearTimeout(viewTimer)
   resizeObserver?.disconnect()
+  window.removeEventListener('resize', resize)
   canvas?.stopRendering()
 })
 </script>

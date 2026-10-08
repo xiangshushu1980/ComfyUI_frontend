@@ -621,7 +621,20 @@ const agentGraphNodes = computed<Obj[]>(() => {
   const workspaceById = new Map(
     [...workspaceMap.values()].map((node) => [node.workspaceId, node])
   )
-  const graphSessions = sessions.value.filter((session) => !session.closed)
+  // Studio records express intent; a conversation node exists only while the
+  // exact PiWeb native session is present and its workspace binding is verified.
+  const graphSessions = sessions.value.filter(
+    (session) =>
+      !session.closed &&
+      Boolean(
+        objects.value.find(
+          (binding) =>
+            binding.kind === 'pi_binding' &&
+            binding.discussionId === session.discussionId &&
+            binding.sessionId
+        ) && agentStates.value[session.id]?.sessionFound === true
+      )
+  )
   const workflowNodes = definitions.value.map((definition) => {
     const related = graphSessions.filter(
       (session) => session.workflowId === definition.id

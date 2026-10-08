@@ -6,19 +6,23 @@ import { join, resolve, sep } from 'node:path'
 import { uuid, hash, requireThat } from './store.mjs'
 import { compileQwen, verifyWorkflow, nativeSnapshot } from './qwen.mjs'
 import { buildVoiceGraph } from './voice.mjs'
+import { createMockMedia } from './mock-media.mjs'
 const exec = promisify(execFile),
   sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const terminal = new Set([
   'succeeded',
   'failed',
   'cancelled',
-  'submission_unknown'
+  'submission_unknown',
+  'paused_generation_mode'
 ])
 export class Execution {
   constructor(store, dataDir, comfyUrl) {
     this.store = store
     this.dataDir = dataDir
     this.comfyUrl = comfyUrl
+    // Mock is the safe development default. Real model execution must be enabled explicitly.
+    this.mode = process.env.STUDIO_GENERATION_MODE === 'real' ? 'real' : 'mock'
     this.active = new Set()
     this.stopped = false
   }
@@ -244,6 +248,7 @@ export class Execution {
       apiHash: compiled.apiHash || hash(graph),
       uiHash: hash(workflow),
       templateId: compiled.templateId || 'breeze-tts-2-character-sample-v1',
+      simulation: this.mode !== 'real',
       status: 'prepared',
       executionKey: uuid(),
       clientId: 'sean-entity-' + uuid(),
@@ -251,6 +256,69 @@ export class Execution {
       nodes: {},
       outputs: [],
       createdAt: new Date().toISOString()
+    })
+  }
+  async executeMock(id) {
+    let run = this.store.get(id)
+    if (terminal.has(run.status)) return
+    if (!run.simulation) {
+      this.update(id, {
+        status: 'paused_generation_mode',
+        error: 'Real generation is disabled; no model request was sent.'
+      })
+      return
+    }
+    this.update(id, { status: 'running', simulation: true, progress: 0.2 })
+    await sleep(250)
+    run = this.store.get(id)
+    const mock = createMockMedia(
+      run.stage,
+      Number.parseInt(run.id.slice(0, 8), 16) || 0
+    )
+    const digest = hash(mock.bytes)
+    const relative = `media/${digest}${mock.extension}`
+    await mkdir(join(this.dataDir, 'media'), { recursive: true })
+    const path = join(this.dataDir, relative)
+    try {
+      await readFile(path)
+    } catch {
+      await writeFile(path, mock.bytes)
+    }
+    await sleep(250)
+    this.store.transaction(() => {
+      const current = this.store.get(id)
+      let asset = this.store
+        .list(run.projectId, 'asset')
+        .find((item) => item.runId === id)
+      if (!asset)
+        asset = this.store.create(run.projectId, 'asset', {
+          name:
+            run.stage === 'voice'
+              ? '[模拟]人物声音样音'
+              : run.stage === 'threeview'
+                ? '[模拟]正侧背三视图'
+                : '[模拟]概念图候选',
+          runId: id,
+          nodeId: 'simulation',
+          hash: digest,
+          path: relative,
+          mime: mock.mime,
+          width: mock.width || null,
+          height: mock.height || null,
+          inputId: run.inputId || null,
+          sourceAssetIds: (run.inputSnapshot.input.references || []).map(
+            (ref) => ref.assetId
+          ),
+          inputHash: run.inputHash,
+          simulation: true
+        })
+      this.store.update(id, current.revision, {
+        status: 'succeeded',
+        simulation: true,
+        progress: 1,
+        outputs: [asset.id],
+        completedAt: new Date().toISOString()
+      })
     })
   }
   async uploadReferences(run) {
@@ -397,6 +465,19 @@ export class Execution {
   }
   async execute(id, recovery = false) {
     if (this.active.has(id) || this.stopped) return
+    const candidate = this.store.get(id)
+    if (candidate.simulation || this.mode !== 'real') {
+      this.active.add(id)
+      try {
+        if (terminal.has(candidate.status)) return
+        await this.executeMock(id)
+      } catch (error) {
+        this.update(id, { status: 'failed', error: error.message })
+      } finally {
+        this.active.delete(id)
+      }
+      return
+    }
     this.active.add(id)
     let lease,
       heartbeat,
@@ -638,6 +719,7 @@ export class Execution {
       .prepare("SELECT body FROM objects WHERE kind='run'")
       .all()) {
       const run = JSON.parse(row.body)
+      if (!run.simulation && this.mode !== 'real') continue
       if (run.promptId && !terminal.has(run.status))
         void this.execute(run.id, true)
       else if (

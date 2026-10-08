@@ -1,11 +1,21 @@
 // Owner: Sean. Private content-addressed image ingestion and bounded thumbnail cache.
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { hash, requireThat, uuid } from './store.mjs'
 const exec = promisify(execFile),
   pending = new Map()
+function validPng(bytes) {
+  return (
+    bytes.length >= 24 &&
+    bytes
+      .subarray(0, 8)
+      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
+    bytes.readUInt32BE(16) > 0 &&
+    bytes.readUInt32BE(20) > 0
+  )
+}
 export async function ingestPng(dataDir, bytes) {
   requireThat(
     bytes.length >= 24 &&
@@ -32,7 +42,9 @@ export async function ingestPng(dataDir, bytes) {
 export async function thumbnail(dataDir, asset) {
   const path = join(dataDir, 'thumbnails', asset.hash + '.png')
   try {
-    return await readFile(path)
+    const cached = await readFile(path)
+    if (validPng(cached)) return cached
+    await unlink(path)
   } catch (e) {
     if (e.code !== 'ENOENT') throw e
   }
@@ -61,8 +73,13 @@ export async function thumbnail(dataDir, asset) {
           ],
           { timeout: 15000 }
         )
+        const generated = await readFile(tmp)
+        requireThat(
+          validPng(generated),
+          'thumbnail generation returned invalid PNG'
+        )
         await rename(tmp, path)
-        return readFile(path)
+        return generated
       })().finally(() => pending.delete(path))
     )
   return pending.get(path)

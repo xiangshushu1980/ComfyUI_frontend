@@ -676,10 +676,18 @@
             </div>
             <small
               >候选数量：{{ selected.parameters?.count }} ·
-              确认后才会提交生成</small
+              {{
+                selected.simulation
+                  ? '本地模拟，不调用生成模型或 ComfyUI'
+                  : '确认后才会提交生成'
+              }}</small
             >
             <button class="primary" @click="confirmGeneration(selected)">
-              确认提示词与引用并生成
+              {{
+                selected.simulation
+                  ? '确认提示词与引用并模拟执行'
+                  : '确认提示词与引用并生成'
+              }}
             </button>
             <button v-if="selected.sessionId" @click="openRunSession(selected)">
               需要调整，打开 Agent 对话
@@ -979,7 +987,7 @@ const canvasObjects = computed(() => [
         definitions.value.find((definition) => definition.id === run.workflowId)
           ?.name || run.name,
       agentWorking: Boolean(state?.working),
-      preview: `${state?.working ? 'Agent 工作中' : statusName(effectiveRunStatus(run))} · ${runOutputSummary(run, outputTypes[run.workflowId] || '资源')}`
+      preview: `${run.simulation ? '模拟流程' : ''}${run.simulation ? ' · ' : ''}${state?.working ? 'Agent 工作中' : statusName(effectiveRunStatus(run))} · ${runOutputSummary(run, outputTypes[run.workflowId] || '资源')}`
     }
   })
 ])
@@ -2463,14 +2471,44 @@ function projectGraph() {
   graph.clear()
   const chapterParents = objectHierarchy(objects.value)
   const visible = canvasObjects.value
+  const assetsById = new Map(
+    objects.value
+      .filter((object) => object.kind === 'asset')
+      .map((asset) => [asset.id, asset])
+  )
   const titleMeasure = document.createElement('canvas').getContext('2d')
   if (titleMeasure)
     titleMeasure.font = `${LiteGraph.NODE_TEXT_SIZE}px ${LiteGraph.NODE_FONT}`
-  const nodeWidths = new Map(
+  const nodeDimensions = new Map<
+    string,
+    {
+      width: number
+      height: number
+      previewWidth: number
+      previewHeight: number
+    }
+  >(
     visible.map((object) => {
       const title = object.name || kindName(object.kind)
       const titleWidth = titleMeasure?.measureText(title).width || 0
-      return [object.id, Math.max(320, Math.ceil(titleWidth + 52))]
+      const asset = assetsById.get(object.assetId)
+      const sourceWidth = asset?.width || 384
+      const sourceHeight = asset?.height || 256
+      const previewScale =
+        object.assetId && ['image', 'video'].includes(object.type)
+          ? Math.min(1, 640 / sourceWidth, 480 / sourceHeight)
+          : 0
+      const previewWidth = Math.round(sourceWidth * previewScale)
+      const previewHeight = Math.round(sourceHeight * previewScale)
+      return [
+        object.id,
+        {
+          width: Math.max(320, Math.ceil(titleWidth + 52), previewWidth + 24),
+          height: Math.max(240, previewHeight + 74),
+          previewWidth,
+          previewHeight
+        }
+      ]
     })
   )
   // Lay out a spanning forest; cross references remain edges, never duplicate nodes.
@@ -2521,11 +2559,11 @@ function projectGraph() {
     visited.add(o.id)
     const start = row
     for (const child of children.get(o.id) || []) place(child, depth + 1)
-    if (row === start) row += o.assetId ? 290 : 210
+    if (row === start) row += (nodeDimensions.get(o.id)?.height || 150) + 50
     nodeDepths.set(o.id, depth)
     columnWidths[depth] = Math.max(
       columnWidths[depth] || 320,
-      nodeWidths.get(o.id) || 320
+      nodeDimensions.get(o.id)?.width || 320
     )
     positions.set(o.id, [0, start])
   }
@@ -2544,14 +2582,13 @@ function projectGraph() {
     n.id = toNodeId(o.id)
     n.pos = positions.get(o.id)!
     n.size = [
-      nodeWidths.get(o.id) || 320,
-      o.assetId
-        ? 240
-        : o.kind === 'proposal_item'
+      nodeDimensions.get(o.id)?.width || 320,
+      nodeDimensions.get(o.id)?.height ||
+        (o.kind === 'proposal_item'
           ? 170
           : o.kind === 'workflow_run'
             ? 145
-            : 150
+            : 150)
     ]
     n.color =
       o.kind === 'entity'
@@ -2572,19 +2609,20 @@ function projectGraph() {
       let image = images.get(o.assetId)
       if (!image) {
         image = new Image()
-        image.src = `/studio-api/v1/assets/${o.assetId}/thumbnail`
+        image.src = `/studio-api/v1/assets/${o.assetId}/${o.type === 'video' ? 'thumbnail' : 'content'}`
         image.onload = () => canvas.setDirty(true, true)
+        image.onerror = () => images.delete(o.assetId)
         images.set(o.assetId, image)
       }
       n.onDrawBackground = (ctx) => {
         if (image?.complete && image.naturalWidth) {
-          const scale = Math.min(296 / image.width, 155 / image.height)
+          const dimensions = nodeDimensions.get(o.id)!
           ctx.drawImage(
             image,
-            12 + (296 - image.width * scale) / 2,
+            (n.size[0] - dimensions.previewWidth) / 2,
             58,
-            image.width * scale,
-            image.height * scale
+            dimensions.previewWidth,
+            dimensions.previewHeight
           )
         }
       }

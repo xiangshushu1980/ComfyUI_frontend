@@ -44,7 +44,12 @@ export const definitions = [
     deprecated: true
   }
 ].map((d) => ({ owner: 'Sean', ...d }))
-const terminal = new Set(['succeeded', 'failed', 'cancelled'])
+const terminal = new Set([
+  'succeeded',
+  'failed',
+  'cancelled',
+  'paused_generation_mode'
+])
 const ref = (o) => ({ id: o.id, revision: o.revision, kind: o.kind })
 export class Workflows {
   constructor(store, execution) {
@@ -270,6 +275,11 @@ export class Workflows {
     // References plus chapter ranges; never inject an entire novel into the system prompt.
     return {
       session,
+      generationMode: this.execution.mode,
+      generationNotice:
+        this.execution.mode === 'mock'
+          ? '模拟模式：图片与声音均为本地合成预览，不会调用生成模型或 ComfyUI。'
+          : '真实生成模式：每次 Run 仍需在 Studio 中确认。',
       project: this.store.project(session.projectId),
       context: context
         ? { ...ref(context), name: context.name, kind: context.kind }
@@ -1124,6 +1134,7 @@ export class Workflows {
       targetId: entity.id,
       stage,
       grantId: grant.id,
+      simulation: this.execution.mode !== 'real',
       parentRunId: body.parentRunId || null,
       status: 'awaiting_input_confirmation',
       inputs,
@@ -1371,6 +1382,7 @@ export class Workflows {
       targetId: entity.id,
       stage: 'voice',
       grantId: grant.id,
+      simulation: this.execution.mode !== 'real',
       status: 'running',
       inputs: [ref(entity)],
       parameters: input,
@@ -1704,14 +1716,15 @@ export class Workflows {
             continue
           const asset = this.store.get(id)
           const resource = this.store.create(run.projectId, 'resource', {
-            name:
+            name: `${asset.simulation ? '[模拟] ' : ''}${
               run.stage === 'voice'
                 ? '人物声音样音'
                 : run.stage === 'threeview'
                   ? '正侧背三视图'
                   : run.stage === 'appearance'
                     ? '形象调整候选'
-                    : '概念图候选',
+                    : '概念图候选'
+            }`,
             entityId: run.targetId,
             type: run.stage === 'voice' ? 'audio' : 'image',
             role:
@@ -1725,7 +1738,8 @@ export class Workflows {
             assetId: id,
             workflowRunId: run.id,
             sourceAssetIds: asset.sourceAssetIds,
-            status: 'candidate'
+            status: 'candidate',
+            simulation: Boolean(asset.simulation)
           })
           this.relation(run.projectId, run.targetId, resource.id, 'owns')
         }

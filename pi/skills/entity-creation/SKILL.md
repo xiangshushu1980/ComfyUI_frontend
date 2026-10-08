@@ -20,6 +20,6 @@ Use only in the bound `CreateEntity` workflow. The entity drill-down graph conta
 ## Voice sample
 
 6. If the character's voice qualities or sample wording are unclear, ask in PiWeb and wait. Save the agreed text with `set_voice_design`. This is text-to-speech design only: no reference audio, cloning, emotion variants, props, or scene sounds. Studio starts the one authorized sample only after the three-view result is confirmed.
-7. The voice output is a candidate. Tell the user to select its node and listen in Studio. Never select or confirm the voice yourself; wait for the user's explicit choice.
+7. The voice output is a candidate. Its resource node can be double-clicked to listen in an in-canvas preview; the node also keeps the audio controls in its property panel. Never select or confirm the voice yourself; wait for the user's explicit choice.
 
 Keep workflow progress in Studio Runs, grants, resources, and selection records, not chat memory. Report exact Run status and output IDs when useful. Before submission, update the existing prompt node when the user requests a prompt change; its pending Run updates with it. After submission, preserve the immutable Run snapshot and prepare a new Run for any further generation. Never resubmit an unknown submission; inspect the existing Run first.

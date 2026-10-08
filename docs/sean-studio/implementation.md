@@ -136,3 +136,9 @@ The entity drill-down now materializes an `实体介绍` resource node and prese
 Right-clicking a resource opens or resumes a CreateEntity Agent session whose context is that exact node. The new `update_resource` and `update_entity_profile` operations update node-backed content; editing a prompt resource while its Run is pending also refreshes the pending Run prompt/hash/revision. Editing an upstream reference description or entity introduction cancels pending image Runs that used it so the Agent can prepare a refreshed prompt. Entity/resource inspector fields use the same revision-checked update operations. Reference descriptions and prompt nodes therefore remain editable in the current canvas and traceable by revision.
 
 Validation for this node extension: JavaScript syntax and `pnpm typecheck` passed under Node 24.18 with the repository's Node >=25 engine warning. No tests, browser interaction, ComfyUI operation or generation run. The user still needs to inspect the real graph layout and Agent context/operation round-trip after restarting Entity Canvas Studio.
+
+### In-canvas media preview and complete node titles (2026-10-08, Owner: Sean)
+
+Image resources render their thumbnail inside the graph node. Double-clicking an image, audio or video resource opens an in-canvas preview; audio/video controls are provided there and video uses byte-range content responses for seeking. Video resource thumbnails are generated through the existing private media thumbnail path. Resource properties also include an inline video player. Graph titles are no longer shortened by the Studio projection and node width expands to fit the title.
+
+Video preview serves registered MP4/WebM assets. This does not add a video generation or upload workflow. Verification is limited to static checks; no browser or media playback was exercised.

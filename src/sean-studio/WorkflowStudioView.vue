@@ -78,6 +78,40 @@
       <div ref="canvasHost" class="canvas-host">
         <canvas ref="canvasElement" />
         <div
+          v-if="mediaPreview"
+          class="media-preview"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="`预览：${mediaPreview.name || kindName(mediaPreview.type)}`"
+          @pointerdown.stop
+          @click.self="mediaPreview = null"
+        >
+          <section>
+            <header>
+              <strong>{{ mediaPreview.name || '媒体预览' }}</strong>
+              <button type="button" @click="mediaPreview = null">关闭 ×</button>
+            </header>
+            <img
+              v-if="mediaPreview.type === 'image'"
+              :src="contentUrl(mediaPreview.assetId)"
+              :alt="mediaPreview.name || '图片预览'"
+            />
+            <audio
+              v-else-if="mediaPreview.type === 'audio'"
+              :src="contentUrl(mediaPreview.assetId)"
+              controls
+              autoplay
+            />
+            <video
+              v-else-if="mediaPreview.type === 'video'"
+              :src="contentUrl(mediaPreview.assetId)"
+              controls
+              autoplay
+              playsinline
+            />
+          </section>
+        </div>
+        <div
           v-if="hoverTooltip"
           class="canvas-tooltip"
           :style="{ left: `${hoverTooltip.x}px`, top: `${hoverTooltip.y}px` }"
@@ -533,8 +567,15 @@
             preload="none"
             class="resource-audio"
           />
+          <video
+            v-else-if="selected.type === 'video' && selected.assetId"
+            :src="contentUrl(selected.assetId)"
+            controls
+            playsinline
+            class="resource-video"
+          />
           <img
-            v-else-if="selected.assetId"
+            v-else-if="selected.type === 'image' && selected.assetId"
             :src="contentUrl(selected.assetId)"
             class="resource-image"
           />
@@ -713,7 +754,12 @@
 <script setup lang="ts">
 // Owner: Sean. Durable business objects and runtime overlays are separate projections.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { LGraph, LGraphCanvas, LGraphNode } from '@/lib/litegraph/src/litegraph'
+import {
+  LGraph,
+  LGraphCanvas,
+  LGraphNode,
+  LiteGraph
+} from '@/lib/litegraph/src/litegraph'
 import type { Rect } from '@/lib/litegraph/src/interfaces'
 import { toNodeId } from '@/types/nodeId'
 import NativeWorkflow from './NativeWorkflow.vue'
@@ -762,6 +808,7 @@ const definitions = ref<Obj[]>([]),
   navigationPath = ref<string[]>([]),
   showAllResources = ref(false),
   showHistory = ref(false)
+const mediaPreview = ref<Obj | null>(null)
 type AgentStatus = {
   working: boolean
   summary: string
@@ -1211,6 +1258,9 @@ const names: Record<string, string> = {
   entity: '实体',
   source: '小说原文',
   resource: '资源',
+  image: '图片',
+  audio: '声音',
+  video: '视频',
   reference: '参考图/素材',
   entity_introduction: '实体介绍',
   concept_prompt: 'Qwen Image 2.1 概念提示词',
@@ -1339,6 +1389,7 @@ async function syncPiProject() {
   }
 }
 async function openProject() {
+  mediaPreview.value = null
   events?.close()
   project.value = undefined
   objects.value = []
@@ -1441,6 +1492,7 @@ function writeRoute() {
 }
 function navigatePath(path: string[], updateUrl = true) {
   clearTimeout(inspectTimer)
+  mediaPreview.value = null
   rememberView()
   navigationPath.value = path
   const object = objectById(path.at(-1) || '')
@@ -2411,6 +2463,16 @@ function projectGraph() {
   graph.clear()
   const chapterParents = objectHierarchy(objects.value)
   const visible = canvasObjects.value
+  const titleMeasure = document.createElement('canvas').getContext('2d')
+  if (titleMeasure)
+    titleMeasure.font = `${LiteGraph.NODE_TEXT_SIZE}px ${LiteGraph.NODE_FONT}`
+  const nodeWidths = new Map(
+    visible.map((object) => {
+      const title = object.name || kindName(object.kind)
+      const titleWidth = titleMeasure?.measureText(title).width || 0
+      return [object.id, Math.max(320, Math.ceil(titleWidth + 52))]
+    })
+  )
   // Lay out a spanning forest; cross references remain edges, never duplicate nodes.
   const byId = new Map(visible.map((o) => [o.id, o]))
   const children = new Map<string, Obj[]>()
@@ -2450,6 +2512,8 @@ function projectGraph() {
     } else roots.push(o)
   }
   const positions = new Map<string, [number, number]>()
+  const nodeDepths = new Map<string, number>()
+  const columnWidths: number[] = []
   const visited = new Set<string>()
   let row = 0
   const place = (o: Obj, depth: number) => {
@@ -2458,19 +2522,29 @@ function projectGraph() {
     const start = row
     for (const child of children.get(o.id) || []) place(child, depth + 1)
     if (row === start) row += o.assetId ? 290 : 210
-    positions.set(o.id, [depth * 400, start])
+    nodeDepths.set(o.id, depth)
+    columnWidths[depth] = Math.max(
+      columnWidths[depth] || 320,
+      nodeWidths.get(o.id) || 320
+    )
+    positions.set(o.id, [0, start])
   }
   for (const root of roots) place(root, 0)
   for (const o of visible) place(o, 0)
+  const columnOffsets: number[] = []
+  for (let depth = 0; depth < columnWidths.length; depth++)
+    columnOffsets[depth] =
+      (columnOffsets[depth - 1] || 0) +
+      (depth ? columnWidths[depth - 1] + 80 : 0)
+  for (const [id, position] of positions)
+    position[0] = columnOffsets[nodeDepths.get(id) || 0] || 0
   for (const o of visible) {
     const title = o.name || kindName(o.kind)
-    const n = new LGraphNode(
-      title.length > 18 ? title.slice(0, 17) + '…' : title
-    )
+    const n = new LGraphNode(title)
     n.id = toNodeId(o.id)
     n.pos = positions.get(o.id)!
     n.size = [
-      320,
+      nodeWidths.get(o.id) || 320,
       o.assetId
         ? 240
         : o.kind === 'proposal_item'
@@ -2494,7 +2568,7 @@ function projectGraph() {
     n.bgcolor = '#152431'
     n.addInput('', '*')
     n.addOutput('', '*')
-    if (o.assetId && o.type !== 'audio') {
+    if (o.assetId && ['image', 'video'].includes(o.type)) {
       let image = images.get(o.assetId)
       if (!image) {
         image = new Image()
@@ -2546,14 +2620,14 @@ function projectGraph() {
       }
       ctx.save()
       ctx.beginPath()
-      ctx.rect(10, 24, 300, n.size[1] - 24)
+      ctx.rect(10, 24, n.size[0] - 20, n.size[1] - 24)
       ctx.clip()
       ctx.fillStyle = '#9eb4c4'
       ctx.font = '12px system-ui'
       ctx.fillText(
         o.kind === 'workflow_run'
           ? `${o.agentWorking ? '◉ Agent 工作中' : statusName(o.displayStatus || effectiveRunStatus(o))} · ${o.workflowName || o.name}`
-          : `${kindName(o.kind)} · ${o.role || kindName(o.item?.type || o.type || '')}`,
+          : `${kindName(o.kind)} · ${kindName(o.role || kindName(o.item?.type || o.type || ''))}`,
         14,
         40
       )
@@ -2561,17 +2635,19 @@ function projectGraph() {
         ctx.fillStyle = '#8fd1ae'
         ctx.fillText(`◉ ${o.agentActivity}`, 14, 58, 286)
       }
-      if (!o.assetId || o.type === 'audio') {
+      if (!o.assetId || o.type === 'audio' || o.type === 'video') {
         ctx.fillStyle = '#d4e0e6'
         ctx.font = '12px system-ui'
         const lines: string[] =
           o.type === 'audio'
-            ? ['♫ 声音样音 · 选择节点可试听', String(o.status || '')]
-            : []
+            ? ['♫ 双击在画布中试听', statusName(o.status)]
+            : o.type === 'video'
+              ? ['▶ 双击在画布中播放', statusName(o.status)]
+              : []
         let line = ''
         for (const character of nodePreview(o)) {
           const next = line + character
-          if (line && ctx.measureText(next).width > 286) {
+          if (line && ctx.measureText(next).width > n.size[0] - 34) {
             lines.push(line)
             line = character.trimStart()
           } else line = next
@@ -2584,7 +2660,7 @@ function projectGraph() {
               text,
               14,
               (o.agentActivity ? 88 : 72) + index * 17,
-              286
+              n.size[0] - 34
             )
           )
       }
@@ -2901,10 +2977,14 @@ onMounted(async () => {
         help:
           canvasMode.value === 'agents'
             ? '单击查看详情 · 右键使用快捷操作'
-            : object.id !== focusId.value &&
-                canDrill(objects.value, object.id, showAllResources.value)
-              ? '单击查看详情 · 双击进入下级 · 右键启动工作流'
-              : '单击查看详情 · 右键查看可用操作'
+            : object.kind === 'resource' &&
+                object.assetId &&
+                ['image', 'audio', 'video'].includes(object.type)
+              ? '单击查看详情 · 双击在画布中预览 · 右键查看操作'
+              : object.id !== focusId.value &&
+                  canDrill(objects.value, object.id, showAllResources.value)
+                ? '单击查看详情 · 双击进入下级 · 右键启动工作流'
+                : '单击查看详情 · 右键查看可用操作'
       }
     } else hoverTooltip.value = null
   })
@@ -2927,7 +3007,14 @@ onMounted(async () => {
     const [x, y] = canvas.convertEventToCanvasOffset(event)
     const node = hitCanvasNode(graph.nodes, x, y)
     const object = node && objectById(String(node.id))
-    if (object && canvasMode.value === 'agents') select(object)
+    if (
+      object?.kind === 'resource' &&
+      object.assetId &&
+      ['image', 'audio', 'video'].includes(object.type)
+    ) {
+      select(object)
+      mediaPreview.value = object
+    } else if (object && canvasMode.value === 'agents') select(object)
     else if (object) drillInto(object)
   })
   canvasElement.value!.addEventListener('pointerup', saveView)
@@ -3231,6 +3318,47 @@ nav small {
 .canvas-tooltip span {
   color: #a8bbc8;
 }
+.media-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(5 12 18 / 82%);
+}
+.media-preview section {
+  display: grid;
+  gap: 12px;
+  width: min(100%, 1100px);
+  max-height: 100%;
+  padding: 14px;
+  border: 1px solid #486173;
+  border-radius: 12px;
+  background: #14232f;
+  box-shadow: 0 18px 60px #000b;
+}
+.media-preview header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.media-preview header strong {
+  overflow-wrap: anywhere;
+}
+.media-preview img,
+.media-preview video {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 180px);
+  margin: auto;
+  border-radius: 6px;
+}
+.media-preview audio {
+  width: min(100%, 760px);
+  margin: 30px auto;
+}
 .node-context-menu {
   position: absolute;
   z-index: 30;
@@ -3245,12 +3373,10 @@ nav small {
   box-shadow: 0 10px 30px #000a;
 }
 .node-context-menu strong {
-  overflow: hidden;
   padding: 5px 8px 7px;
   color: #c4d2dc;
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .node-context-menu button {
   border: 0;
@@ -3399,6 +3525,14 @@ nav small {
 .resource-audio {
   width: 100%;
   margin: 12px 0;
+}
+.resource-video {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  margin: 12px 0;
+  border-radius: 7px;
+  background: #080e13;
 }
 .candidate {
   border-top: 1px solid var(--line);

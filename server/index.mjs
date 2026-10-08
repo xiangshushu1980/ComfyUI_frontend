@@ -1,10 +1,10 @@
 // Owner: Sean. Loopback product gateway, independent of the shared ComfyUI store.
+import { createReadStream, existsSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { homedir } from 'node:os'
 import { basename, join, resolve, extname } from 'node:path'
 import { execFile } from 'node:child_process'
 import { readFile, stat } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import { Store, hash, requireThat } from './store.mjs'
@@ -493,9 +493,78 @@ export function createStudioServer({
               m[2] === 'content' && /^media\/[a-f0-9]{64}\.wav$/.test(a.path),
               'invalid audio media'
             )
+          else if (a.mime === 'video/mp4' || a.mime === 'video/webm')
+            requireThat(
+              a.path ===
+                `media/${a.hash}.${a.mime === 'video/mp4' ? 'mp4' : 'webm'}`,
+              'invalid video media'
+            )
           else requireThat(false, 'unsupported media type')
-          if (m[2] === 'thumbnail')
-            requireThat(a.mime === 'image/png', 'thumbnail requires an image')
+          if (m[2] === 'thumbnail') {
+            requireThat(
+              ['image/png', 'video/mp4', 'video/webm'].includes(a.mime),
+              'thumbnail requires an image or video'
+            )
+            res.writeHead(200, {
+              'content-type': 'image/png',
+              'cache-control': 'private,max-age=86400'
+            })
+            res.end(await thumbnail(dataDir, a))
+            return
+          }
+          if (a.mime === 'video/mp4' || a.mime === 'video/webm') {
+            const filePath = join(dataDir, a.path)
+            const fileStat = await stat(filePath)
+            const range = req.headers.range
+            if (range) {
+              const match = /^bytes=(\d*)-(\d*)$/.exec(range)
+              if (!match || (!match[1] && !match[2])) {
+                res.writeHead(416, {
+                  'content-range': `bytes */${fileStat.size}`
+                })
+                res.end()
+                return
+              }
+              const suffixLength = match[1] ? null : Number(match[2])
+              const start = match[1]
+                ? Number(match[1])
+                : Math.max(0, fileStat.size - (suffixLength || 0))
+              const end = match[1]
+                ? match[2]
+                  ? Math.min(Number(match[2]), fileStat.size - 1)
+                  : fileStat.size - 1
+                : fileStat.size - 1
+              if (
+                !Number.isSafeInteger(start) ||
+                !Number.isSafeInteger(end) ||
+                start >= fileStat.size ||
+                end < start
+              ) {
+                res.writeHead(416, {
+                  'content-range': `bytes */${fileStat.size}`
+                })
+                res.end()
+                return
+              }
+              res.writeHead(206, {
+                'content-type': a.mime,
+                'content-length': end - start + 1,
+                'content-range': `bytes ${start}-${end}/${fileStat.size}`,
+                'accept-ranges': 'bytes',
+                'cache-control': 'private,max-age=86400'
+              })
+              createReadStream(filePath, { start, end }).pipe(res)
+              return
+            }
+            res.writeHead(200, {
+              'content-type': a.mime,
+              'content-length': fileStat.size,
+              'accept-ranges': 'bytes',
+              'cache-control': 'private,max-age=86400'
+            })
+            createReadStream(filePath).pipe(res)
+            return
+          }
           res.writeHead(200, {
             'content-type': a.mime,
             'cache-control': 'private,max-age=86400'

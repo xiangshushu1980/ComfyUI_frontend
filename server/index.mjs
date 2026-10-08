@@ -665,7 +665,7 @@ export function createStudioServer({
             store.write(path, b, () =>
               m[2] === 'adopt'
                 ? workflows.confirmCandidate(m[1], b)
-                : store.update(m[1], b.expectedRevision, { status: 'rejected' })
+                : workflows.rejectProposal(m[1], b)
             )
           )
         }

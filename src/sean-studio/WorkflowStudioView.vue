@@ -295,7 +295,7 @@
             class="workflow-run-entry"
             @click="selectId(run.id)"
           >
-            {{ run.name }} · {{ statusName(run.status) }} ·
+            {{ run.name }} · {{ statusName(effectiveRunStatus(run)) }} ·
             {{ formatAgentTime(run.createdAt) }}
           </button>
           <p v-if="!workflowRuns(selected.workflowId).length">暂无运行记录</p>
@@ -565,7 +565,7 @@
           </button></template
         >
         <template v-if="selected.kind === 'workflow_run'"
-          ><p>{{ statusName(selected.status) }}</p>
+          ><p>{{ statusName(effectiveRunStatus(selected)) }}</p>
           <button v-if="selected.sessionId" @click="openRunSession(selected)">
             打开对应 PiWeb ↗</button
           ><button
@@ -845,22 +845,14 @@ const canvasObjects = computed(() => [
       CreateEntity: '概念图',
       GenerateThreeView: '三视图'
     }
-    const outputCount = (run.outputs || []).reduce(
-      (count: number, id: string) => {
-        const proposal = objects.value.find(
-          (item) => item.id === id && item.kind === 'proposal'
-        )
-        return count + (proposal ? proposal.items?.length || 0 : 1)
-      },
-      0
-    )
     return {
       ...run,
+      displayStatus: effectiveRunStatus(run),
       workflowName:
         definitions.value.find((definition) => definition.id === run.workflowId)
           ?.name || run.name,
       agentWorking: Boolean(state?.working),
-      preview: `${state?.working ? 'Agent 工作中' : statusName(run.status)} · 输出 ${outputTypes[run.workflowId] || '资源'} ${outputCount} 项`
+      preview: `${state?.working ? 'Agent 工作中' : statusName(effectiveRunStatus(run))} · ${runOutputSummary(run, outputTypes[run.workflowId] || '资源')}`
     }
   })
 ])
@@ -981,7 +973,7 @@ const agentGraphNodes = computed<Obj[]>(() => {
             ? 'working'
             : binding.status === 'guard_unverified'
               ? 'guard_unverified'
-              : session.status || 'ready'
+              : effectiveSessionStatus(session) || 'ready'
     return {
       id: `agent-conversation:${session.id}`,
       kind: 'workflow_conversation',
@@ -1045,8 +1037,67 @@ const agentGraphNodes = computed<Obj[]>(() => {
     ...conversationNodes
   ]
 })
+function proposalForRun(run: Obj) {
+  const proposalId = (run.outputs || []).find((id: string) =>
+    objects.value.some(
+      (object) => object.id === id && object.kind === 'proposal'
+    )
+  )
+  return objects.value.find((object) => object.id === proposalId)
+}
+function effectiveRunStatus(run: Obj) {
+  const proposal = proposalForRun(run)
+  if (run.status === 'waiting_confirmation' && proposal?.status === 'rejected')
+    return 'cancelled'
+  if (
+    run.status === 'waiting_confirmation' &&
+    ['adopted', 'resolved'].includes(proposal?.status)
+  )
+    return 'succeeded'
+  return run.status
+}
+function effectiveSessionStatus(session: Obj) {
+  if (session.status !== 'waiting_confirmation') return session.status
+  const relatedRuns = runs.value.filter((run) => run.sessionId === session.id)
+  return relatedRuns.length && relatedRuns.every((run) => !activeRun(run))
+    ? 'ready'
+    : session.status
+}
+function runOutputSummary(run: Obj, outputType: string) {
+  if (run.workflowId === 'ExtractEntities') {
+    const proposal = proposalForRun(run)
+    if (!proposal) return '实体候选处理中'
+    const items = proposal.items || []
+    const adopted = items.filter(
+      (item: Obj) =>
+        proposal.resolved?.[item.key]?.status === 'adopted' ||
+        proposal.resolved?.[item.key]?.objectId
+    ).length
+    const rejected =
+      proposal.status === 'rejected'
+        ? items.length - adopted
+        : items.filter(
+            (item: Obj) => proposal.resolved?.[item.key]?.status === 'rejected'
+          ).length
+    const pending =
+      proposal.status === 'pending'
+        ? items.filter((item: Obj) => !proposal.resolved?.[item.key]).length
+        : 0
+    return `候选：待确认 ${pending} · 已确认 ${adopted} · 已取消 ${rejected}`
+  }
+  const outputCount = (run.outputs || []).reduce(
+    (count: number, id: string) => {
+      const proposal = objects.value.find(
+        (item) => item.id === id && item.kind === 'proposal'
+      )
+      return count + (proposal ? proposal.items?.length || 0 : 1)
+    },
+    0
+  )
+  return `输出 ${outputType} ${outputCount} 项`
+}
 const activeRun = (run: Obj) =>
-  !['succeeded', 'failed', 'cancelled'].includes(run.status)
+  !['succeeded', 'failed', 'cancelled'].includes(effectiveRunStatus(run))
 const objectById = (id: string) =>
   objects.value.find((o) => o.id === id) ||
   pendingProposalItems.value.find((o) => o.id === id) ||
@@ -2251,7 +2302,7 @@ function projectGraph() {
         : o.kind === 'proposal_item'
           ? '#665231'
           : o.kind === 'workflow_run'
-            ? o.status === 'failed'
+            ? effectiveRunStatus(o) === 'failed'
               ? '#713e3c'
               : activeRun(o)
                 ? '#455b70'
@@ -2318,7 +2369,7 @@ function projectGraph() {
       ctx.font = '12px system-ui'
       ctx.fillText(
         o.kind === 'workflow_run'
-          ? `${o.agentWorking ? '◉ Agent 工作中' : statusName(o.status)} · ${o.workflowName || o.name}`
+          ? `${o.agentWorking ? '◉ Agent 工作中' : statusName(o.displayStatus || effectiveRunStatus(o))} · ${o.workflowName || o.name}`
           : `${kindName(o.kind)} · ${o.role || kindName(o.item?.type || o.type || '')}`,
         14,
         40

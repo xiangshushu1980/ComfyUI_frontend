@@ -116,3 +116,7 @@ Workflow conversations may carry a `contextId` for a source, chapter, scene, ent
 Active and waiting-confirmation `workflow_run` records render as nodes between their inputs and outputs. Successful novel structure/refinement operations now also create Run records. Completed Run nodes are collapsed by default and can be shown from the canvas history toggle; the Agent monitor lists recent runs by Workflow. Agent activity appears as a compact badge on a scoped source/chapter/entity node while the run node previews its output type and count. A candidate's edit shortcut copies a candidate-specific prompt and opens its exact source conversation; the user pastes the prompt into PiWeb and remains in control of the follow-up. Generation still requires its existing explicit authorization.
 
 This revision has not been browser- or test-verified. Prompt text is represented in Run parameters unless it is saved as a reusable resource. Long-text chunking and cross-chapter entity reconciliation remain deferred.
+
+### Entity proposal count and Run status reconciliation (2026-10-08, Owner: Sean)
+
+Extraction Run previews distinguish unresolved, adopted and rejected proposal items instead of counting every original item as pending. Legacy Runs whose proposal was rejected before Run/session synchronization derive their displayed terminal status from the proposal; new whole-proposal rejection also updates the linked Run and session. Rejected proposals intentionally have no candidate-node links.

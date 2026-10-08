@@ -578,6 +578,22 @@ export class Workflows {
     }
     return result
   }
+  rejectProposal(proposalId, body) {
+    const proposal = this.store.get(proposalId)
+    requireThat(proposal.kind === 'proposal', 'proposal required')
+    const updated = this.store.update(proposal.id, body.expectedRevision, {
+      status: 'rejected'
+    })
+    if (proposal.workflowRunId) {
+      const run = this.store.get(proposal.workflowRunId)
+      this.store.update(run.id, run.revision, { status: 'cancelled' })
+      if (run.sessionId) {
+        const session = this.session(run.sessionId)
+        this.store.update(session.id, session.revision, { status: 'ready' })
+      }
+    }
+    return updated
+  }
   addReference(sessionId, body) {
     const s = this.session(sessionId)
     requireThat(

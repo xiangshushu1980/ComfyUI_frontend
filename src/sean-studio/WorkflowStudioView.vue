@@ -188,17 +188,24 @@
             :key="workspace.workspaceId"
           >
             <p>
-              {{ workspace.workspaceLabel }} ·
+              <button
+                class="workspace-path-link"
+                :disabled="
+                  navigationBusy ||
+                  !hasAgentWorkspaceBinding(workspace.workspaceId)
+                "
+                @click="openAgentWorkspace(workspace)"
+              >
+                {{ workspace.workspaceLabel }} ↗
+              </button>
+              ·
               {{ workspace.status === '待创建' ? '待创建' : '已准备' }}
             </p>
             <button
-              :disabled="
-                navigationBusy ||
-                !hasAgentWorkspaceBinding(workspace.workspaceId)
-              "
-              @click="openAgentWorkspace(workspace)"
+              :disabled="!hasAgentWorkspaceBinding(workspace.workspaceId)"
+              @click="copyAgentWorkspacePath(workspace.workspaceId)"
             >
-              在 PiWeb 打开工作目录 ↗
+              复制路径
             </button>
           </div>
         </template>
@@ -208,7 +215,25 @@
             {{ selected.target === 'entity' ? '实体级工作流' : '工程级工作流' }}
           </p>
           <p>{{ selected.sessionCount }} 个独立对话</p>
-          <p>运行目录：{{ agentWorkspaceLabels(selected.workspaceIds) }}</p>
+          <div v-for="workspaceId in selected.workspaceIds" :key="workspaceId">
+            <p>
+              运行目录：
+              <button
+                class="workspace-path-link"
+                :disabled="navigationBusy"
+                @click="openAgentWorkspace(workspaceForId(workspaceId))"
+              >
+                {{ agentWorkspaceLabel(workspaceId) }} ↗
+              </button>
+            </p>
+            <button
+              :disabled="!hasAgentWorkspaceBinding(workspaceId)"
+              @click="copyAgentWorkspacePath(workspaceId)"
+            >
+              复制路径
+            </button>
+          </div>
+          <p v-if="!selected.workspaceIds.length">运行目录：尚未关联工作区</p>
           <label v-if="selected.target === 'entity'"
             >目标实体
             <select v-model="workflowTargets[selected.workflowId]">
@@ -224,16 +249,9 @@
           </label>
           <button
             :disabled="navigationBusy"
-            @click="enterWorkflow(selected.workflowId)"
-          >
-            {{ selected.sessionCount ? '继续此 Workflow' : '开始此 Workflow' }}
-            ↗
-          </button>
-          <button
-            :disabled="navigationBusy"
             @click="createWorkflowConversation(selected.workflowId)"
           >
-            添加对话 ＋
+            新建对话 ＋
           </button>
         </template>
         <template v-if="selected.kind === 'workflow_conversation'">
@@ -812,8 +830,14 @@ function agentWorkspaceLabel(workspaceId?: string) {
       ?.workspaceLabel || '尚未关联工作区'
   )
 }
-function agentWorkspaceLabels(workspaceIds: string[] = []) {
-  return workspaceIds.map(agentWorkspaceLabel).join('、') || '尚未关联工作区'
+function workspaceForId(workspaceId: string) {
+  return {
+    id: `agent-workspace:${workspaceId}`,
+    kind: 'agent_workspace',
+    revision: 1,
+    workspaceId,
+    workspaceLabel: agentWorkspaceLabel(workspaceId)
+  }
 }
 function hasAgentWorkspaceBinding(workspaceId?: string) {
   return objects.value.some(
@@ -1543,6 +1567,25 @@ async function openAgentWorkspace(workspace: Obj) {
     agentError.value = e instanceof Error ? e.message : String(e)
   } finally {
     navigationBusy.value = false
+  }
+}
+async function copyAgentWorkspacePath(workspaceId: string) {
+  const binding = objects.value.find(
+    (item) => item.kind === 'pi_binding' && item.workspaceId === workspaceId
+  )
+  if (!binding) return
+  try {
+    const prepared = await studioApi(
+      `/discussions/${binding.discussionId}/workspace`,
+      { requestId: requestId() }
+    )
+    if (prepared.workspaceId !== workspaceId)
+      throw new Error('工作区绑定已变化，请刷新工程后重试。')
+    await navigator.clipboard.writeText(prepared.workspace)
+    syncMessage.value = `已复制目录路径：${prepared.workspace}`
+    agentError.value = ''
+  } catch (e) {
+    agentError.value = e instanceof Error ? e.message : String(e)
   }
 }
 async function openAgentConversation(node: Obj) {
@@ -2525,6 +2568,16 @@ nav small {
 .inspector button {
   margin: 6px 4px 6px 0;
   font-size: 11px;
+}
+.inspector .workspace-path-link {
+  margin: 0;
+  padding: 0;
+  color: #9ad9ed;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .inspector select {
   width: 100%;

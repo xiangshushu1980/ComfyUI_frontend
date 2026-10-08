@@ -203,12 +203,61 @@ export function adopt(store, id, body) {
   for (const item of selected)
     resolved[item.key] = {
       decisionId: decision.id,
-      objectId: map[item.key] || null
+      objectId: map[item.key] || null,
+      status: 'adopted'
     }
+  const fullyResolved = p.items.every((item) => resolved[item.key])
+  const allAdopted = p.items.every(
+    (item) => resolved[item.key]?.status === 'adopted'
+  )
   store.update(id, p.revision, {
-    status: p.items.every((i) => resolved[i.key]) ? 'adopted' : 'pending',
+    status: fullyResolved ? (allAdopted ? 'adopted' : 'resolved') : 'pending',
     resolved,
     decisionId: decision.id
   })
   return { decision, adopted }
+}
+
+export function rejectCandidate(store, id, body) {
+  const proposal = store.get(id)
+  requireThat(
+    proposal.kind === 'proposal' && proposal.status === 'pending',
+    'proposal is not pending',
+    409
+  )
+  requireThat(
+    body.expectedHash === proposal.contentHash,
+    'proposal hash conflict',
+    409
+  )
+  const candidate = proposal.items.find((item) => item.key === body.key)
+  requireThat(candidate, 'unknown candidate key', 404)
+  requireThat(
+    !proposal.resolved?.[body.key],
+    'candidate is already resolved',
+    409
+  )
+  const decision = store.create(proposal.projectId, 'decision', {
+    proposalId: proposal.id,
+    selectedKeys: [],
+    rejectedKeys: [body.key],
+    mapping: {},
+    adoptedIds: [],
+    actor: 'human'
+  })
+  const resolved = {
+    ...(proposal.resolved || {}),
+    [body.key]: { decisionId: decision.id, objectId: null, status: 'rejected' }
+  }
+  const fullyResolved = proposal.items.every((item) => resolved[item.key])
+  const updated = store.update(proposal.id, proposal.revision, {
+    status: fullyResolved
+      ? proposal.items.every((item) => resolved[item.key]?.status === 'adopted')
+        ? 'adopted'
+        : 'resolved'
+      : 'pending',
+    resolved,
+    decisionId: decision.id
+  })
+  return { proposal: updated, decision }
 }

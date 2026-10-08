@@ -1,7 +1,7 @@
 // Owner: Sean. Shared business operations for HTTP, CLI and bound PiWeb agents.
 import { readFileSync } from 'node:fs'
 import { hash, requireThat } from './store.mjs'
-import { createSource, propose, adopt } from './domain.mjs'
+import { createSource, propose, adopt, rejectCandidate } from './domain.mjs'
 const threeView = JSON.parse(
   readFileSync(new URL('../templates/qwen/threeview.v1.json', import.meta.url))
 )
@@ -73,12 +73,50 @@ export class Workflows {
       definition.target === 'entity'
         ? this.store.sameProject(body.targetId, projectId, 'entity').id
         : projectId
+    const context = body.contextId
+      ? this.store.sameProject(body.contextId, projectId)
+      : null
+    if (context)
+      requireThat(
+        ['source', 'chapter', 'scene', 'entity', 'resource'].includes(
+          context.kind
+        ),
+        'unsupported Workflow context object'
+      )
+    const today = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Asia/Shanghai'
+    }).format(new Date())
+    const target = targetId === projectId ? null : this.store.get(targetId)
+    const scopedSessions = this.store
+      .list(projectId, 'workflow_session')
+      .filter(
+        (session) =>
+          session.workflowId === definition.id &&
+          session.targetId === targetId &&
+          (session.contextId || null) === (context?.id || null) &&
+          session.createdAt &&
+          new Intl.DateTimeFormat('sv-SE', {
+            timeZone: 'Asia/Shanghai'
+          }).format(new Date(session.createdAt)) === today
+      )
+    const contextName = context?.name || context?.kind || target?.name
+    const sessionName = [
+      definition.name,
+      contextName,
+      today,
+      String(scopedSessions.length + 1).padStart(2, '0')
+    ]
+      .filter(Boolean)
+      .join(' · ')
     // Resume a purpose-scoped work instance, never reuse an unrelated conversation silently.
     const old = this.store
       .list(projectId, 'workflow_session')
       .find(
         (s) =>
-          s.workflowId === definition.id && s.targetId === targetId && !s.closed
+          s.workflowId === definition.id &&
+          s.targetId === targetId &&
+          (s.contextId || null) === (context?.id || null) &&
+          !s.closed
       )
     if (old && !body.newInstance) return old
     let discussion = body.discussionId
@@ -93,18 +131,21 @@ export class Workflows {
         409
       )
     discussion ||= this.store.create(projectId, 'discussion', {
-      name: definition.name,
+      name: sessionName,
       goal: body.goal || definition.name,
       links: [],
       status: 'idle'
     })
     return this.store.create(projectId, 'workflow_session', {
-      name: definition.name,
+      name: sessionName,
       workflowId: definition.id,
       definitionVersion: definition.version,
       targetId,
+      contextId: context?.id || null,
       discussionId: discussion.id,
-      goal: body.goal || definition.name,
+      goal:
+        body.goal ||
+        `${definition.name}${context ? ` · ${context.name || context.kind}` : ''}`,
       status: 'ready',
       createdAt: new Date().toISOString(),
       closed: false
@@ -152,7 +193,13 @@ export class Workflows {
       session.targetId === session.projectId
         ? null
         : this.store.get(session.targetId)
-    const chapters = all.filter((o) => o.kind === 'chapter' && !o.supersededBy)
+    const context = session.contextId ? this.store.get(session.contextId) : null
+    const chapters = all.filter(
+      (o) =>
+        o.kind === 'chapter' &&
+        !o.supersededBy &&
+        (!context || context.kind !== 'chapter' || o.id === context.id)
+    )
     const related = target
       ? chapters.filter((c) =>
           (target.sources || []).some(
@@ -161,21 +208,39 @@ export class Workflows {
               (c.anchorIds || []).includes(s.anchorId)
           )
         )
-      : chapters
+      : context?.kind === 'chapter'
+        ? chapters
+        : context?.kind === 'source'
+          ? chapters.filter((chapter) => chapter.sourceId === context.id)
+          : context?.kind === 'entity'
+            ? chapters.filter((chapter) =>
+                (context.sources || []).some(
+                  (source) =>
+                    source.sourceId === chapter.sourceId &&
+                    (chapter.anchorIds || []).includes(source.anchorId)
+                )
+              )
+            : chapters
     const sourceIds = new Set(related.map((c) => c.sourceId).filter(Boolean))
     const objects = all.filter(
       (o) =>
+        o.id === context?.id ||
         o.id === target?.id ||
         related.some((c) => c.id === o.id) ||
         (o.kind === 'source' && (!target || sourceIds.has(o.id))) ||
         (o.kind === 'resource' && o.entityId === target?.id) ||
-        (o.kind === 'entity' && !target) ||
+        (o.kind === 'entity' &&
+          !target &&
+          (!context || context.kind !== 'entity' || o.id === context.id)) ||
         (o.kind === 'workflow_run' && o.sessionId === id)
     )
     // References plus chapter ranges; never inject an entire novel into the system prompt.
     return {
       session,
       project: this.store.project(session.projectId),
+      context: context
+        ? { ...ref(context), name: context.name, kind: context.kind }
+        : null,
       objects: objects.map((o) => ({
         ...ref(o),
         name: o.name,
@@ -203,7 +268,7 @@ export class Workflows {
     const existing = this.store
       .list(projectId, 'chapter')
       .filter((c) => c.sourceId === source.id && !c.supersededBy)
-    if (existing.length) return { source, chapters: existing }
+    if (existing.length) return { source, chapters: existing, run: null }
     const headings = [
       ...source.text.matchAll(
         /^(?:第[零〇一二三四五六七八九十百千万\d]+[章节回卷部][^\n]*|chapter\s+\d+[^\n]*|#{1,3}\s+[^\n]+)\s*$/gim
@@ -246,7 +311,20 @@ export class Workflows {
     })
     for (const chapter of chapters)
       this.relation(projectId, source.id, chapter.id, 'contains')
-    return { source, chapters }
+    const run = this.store.create(projectId, 'workflow_run', {
+      name: '小说导入与分章',
+      workflowId: 'StructureNovel',
+      definitionVersion: 1,
+      sessionId: body.sessionId || null,
+      targetId: source.id,
+      status: 'succeeded',
+      inputs: [ref(source)],
+      parameters: { mode: 'structure_novel' },
+      outputs: chapters.map((chapter) => chapter.id),
+      executionRelations: [],
+      createdAt: new Date().toISOString()
+    })
+    return { source, chapters, run }
   }
   refineChapters(sessionId, body) {
     const session = this.session(sessionId)
@@ -354,7 +432,23 @@ export class Workflows {
       this.store.update(old.id, old.revision, { supersededBy: replacement.id })
       supersededChapterIds.push(old.id)
     }
-    return { source, chapters, supersededChapterIds }
+    const run = this.store.create(session.projectId, 'workflow_run', {
+      name: '小说导入与分章',
+      workflowId: 'StructureNovel',
+      definitionVersion: session.definitionVersion,
+      sessionId: session.id,
+      targetId: source.id,
+      status: 'succeeded',
+      inputs: [
+        { ...ref(source), revision: body.sourceRevision },
+        ...oldChapters.map(ref)
+      ],
+      parameters: { mode: 'refine_chapters' },
+      outputs: chapters.map((chapter) => chapter.id),
+      executionRelations: [],
+      createdAt: new Date().toISOString()
+    })
+    return { source, chapters, supersededChapterIds, run }
   }
   relation(projectId, fromId, toId, type) {
     this.store.sameProject(fromId, projectId)
@@ -384,6 +478,21 @@ export class Workflows {
       s.projectId,
       'chapter'
     )
+    const scopedContext = s.contextId
+      ? this.store.sameProject(s.contextId, s.projectId)
+      : null
+    if (scopedContext?.kind === 'chapter')
+      requireThat(
+        chapter.id === scopedContext.id,
+        'chapter is outside the selected Workflow context',
+        403
+      )
+    if (scopedContext?.kind === 'source')
+      requireThat(
+        chapter.sourceId === scopedContext.id,
+        'chapter is outside the selected source context',
+        403
+      )
     requireThat(
       body.items.every(
         (i) =>
@@ -437,14 +546,34 @@ export class Workflows {
     if (p.workflowRunId) {
       const run = this.store.get(p.workflowRunId)
       this.store.update(run.id, run.revision, {
-        status: p.status === 'adopted' ? 'succeeded' : 'waiting_confirmation',
+        status: ['adopted', 'resolved'].includes(p.status)
+          ? 'succeeded'
+          : 'waiting_confirmation',
         outputs: [
           ...new Set([...run.outputs, ...result.adopted.map((o) => o.id)])
         ]
       })
       const s = this.session(run.sessionId)
       this.store.update(s.id, s.revision, {
-        status: p.status === 'adopted' ? 'ready' : 'waiting_confirmation'
+        status: ['adopted', 'resolved'].includes(p.status)
+          ? 'ready'
+          : 'waiting_confirmation'
+      })
+    }
+    return result
+  }
+  rejectCandidate(proposalId, body) {
+    const result = rejectCandidate(this.store, proposalId, body)
+    const proposal = result.proposal
+    if (proposal.workflowRunId) {
+      const run = this.store.get(proposal.workflowRunId)
+      const done = ['adopted', 'resolved'].includes(proposal.status)
+      this.store.update(run.id, run.revision, {
+        status: done ? 'succeeded' : 'waiting_confirmation'
+      })
+      const session = this.session(run.sessionId)
+      this.store.update(session.id, session.revision, {
+        status: done ? 'ready' : 'waiting_confirmation'
       })
     }
     return result
@@ -825,7 +954,7 @@ export class Workflows {
     )
     return this.store.write(`workflow:${sessionId}:${operation}`, body, () => {
       if (operation === 'structure_novel')
-        return this.structure(s.projectId, body)
+        return this.structure(s.projectId, { ...body, sessionId: s.id })
       if (operation === 'refine_chapters')
         return this.refineChapters(sessionId, body)
       if (operation === 'propose_entities')

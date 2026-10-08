@@ -48,7 +48,7 @@ export class PiBridge {
     const d = this.store.get(discussionId)
     requireThat(d.kind === 'discussion', 'discussion required')
     const project = this.store.project(d.projectId)
-    const sessionName = `${project.name} · ${d.name}`
+    const sessionName = d.name || 'Agent 对话'
     const bindings = this.store.list(d.projectId, 'pi_binding')
     let binding = bindings.find((b) => b.discussionId === d.id)
     const slug = (value) =>
@@ -75,7 +75,10 @@ export class PiBridge {
       join(cwd, '.pi/extensions/entity-studio.js')
     )
     await copyFile(
-      new URL('../pi/skills/chapter-entity-extraction/SKILL.md', import.meta.url),
+      new URL(
+        '../pi/skills/chapter-entity-extraction/SKILL.md',
+        import.meta.url
+      ),
       join(cwd, '.pi/skills/chapter-entity-extraction/SKILL.md')
     )
     let capability =
@@ -402,12 +405,11 @@ export class PiBridge {
           error: null
         })
       )
-      const discussion = this.store.get(discussionId),
-        project = this.store.project(discussion.projectId)
+      const discussion = this.store.get(discussionId)
       try {
         await this.request(`/api/agent/${created.sessionId}`, {
           type: 'set_session_name',
-          name: `${project.name} · ${discussion.name}`
+          name: discussion.name || 'Agent 对话'
         })
       } catch {
         // Session labels are best-effort; the shared workspace name stays readable.
@@ -481,11 +483,10 @@ export class PiBridge {
           status: 'bound'
         })
       )
-      const discussion = this.store.get(row.discussionId),
-        project = this.store.project(row.projectId)
+      const discussion = this.store.get(row.discussionId)
       return {
         ...updated,
-        sessionName: `${project.name} · ${discussion.name}`
+        sessionName: discussion.name || 'Agent 对话'
       }
     }
     const row = bindings.find((b) => b.discussionId === body.discussionId)

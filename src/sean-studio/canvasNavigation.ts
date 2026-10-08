@@ -21,6 +21,7 @@ export type CanvasObject = {
   status?: string
   role?: string
   assetId?: string
+  inputs?: { id: string }[]
   outputs?: string[]
 }
 export type CanvasRoute = { projectId: string; path: string[] }
@@ -94,6 +95,18 @@ export function projectScope<T extends CanvasObject>(
   const parents = objectHierarchy(objects)
   const scope = objects.find((o) => o.id === scopeId)
   if (scopeId && !scope) return []
+  if (scope?.kind === 'workflow_run') {
+    const relatedIds = new Set([
+      ...(scope.inputs || []).map((input) => input.id),
+      ...(scope.outputs || [])
+    ])
+    return objects.filter(
+      (object) =>
+        object.id === scope.id ||
+        relatedIds.has(object.id) ||
+        (object.kind === 'resource' && relatedIds.has(object.assetId || ''))
+    )
+  }
   const descendants = new Set(
     objects
       .filter((o) => scope && isWithin(o.id, scope.id, parents))

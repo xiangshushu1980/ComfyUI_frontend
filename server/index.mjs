@@ -648,6 +648,15 @@ export function createStudioServer({
           )
         }
         if (
+          (m = path.match(/^\/proposals\/([^/]+)\/reject-candidate$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          return send(
+            store.write(path, b, () => workflows.rejectCandidate(m[1], b))
+          )
+        }
+        if (
           (m = path.match(/^\/proposals\/([^/]+)\/(adopt|reject)$/)) &&
           req.method === 'POST'
         ) {

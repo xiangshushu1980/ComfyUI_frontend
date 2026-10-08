@@ -1,53 +1,27 @@
 <!-- eslint-disable @intlify/vue-i18n/no-raw-text -- Sean v0.2 UI is Chinese. -->
 <template>
-  <div :class="['workspace', { 'library-collapsed': !libraryOpen }]">
+  <div class="workspace">
     <div class="floating-brand">
       <span class="brand-mark" aria-hidden="true">◈</span>
-      <span class="brand-project">{{ project?.name || 'STUDIO' }}</span>
-      <button
-        type="button"
-        class="library-toggle"
-        :aria-label="libraryOpen ? '收起左侧面板' : '展开左侧面板'"
-        :title="libraryOpen ? '收起左侧面板' : '展开左侧面板'"
-        @click="libraryOpen = !libraryOpen"
-      >
-        {{ libraryOpen ? '‹' : '›' }}
-      </button>
-    </div>
-    <aside v-if="libraryOpen" class="library">
-      <label>影片工程</label
-      ><select
+      <span class="brand-project">创作图谱</span>
+      <select
         v-model="projectId"
         :disabled="navigationBusy"
+        aria-label="切换创作工程"
         @change="openProject"
       >
-        <option value="">选择工程</option>
+        <option value="">选择创作工程</option>
         <option v-for="p in projects" :key="p.id" :value="p.id">
           {{ p.name }}
-        </option></select
-      ><button @click="newProject">＋ 新建工程</button> <label>长期数据</label>
-      <label>实体</label
-      ><button
-        v-for="entity in entities"
-        :key="entity.id"
-        @click="queueInspect(entity, $event)"
-        @dblclick="drillInto(entity, false)"
-      >
-        ◇ {{ entity.name }}<small>{{ kindName(entity.type) }}</small>
-      </button>
-      <label class="toggle"
-        ><input
-          v-model="showAllResources"
-          type="checkbox"
-        />展开全部实体资源</label
-      >
-      <p class="hint">在 PiWeb 表达目标。<br />这里检查对象、来源和结果。</p>
-    </aside>
+        </option>
+      </select>
+      <button type="button" title="新建创作工程" @click="newProject">＋</button>
+    </div>
     <main>
       <nav class="canvas-navigation" aria-label="画布导航">
         <div class="navigation-location">
           <div v-if="canvasMode === 'agents'" class="agent-view-heading">
-            {{ project?.name || '影片工程' }} / Agent 工作流关系
+            {{ project?.name || '创作工程' }} / Agent 运行监控
           </div>
           <div v-else class="breadcrumbs" aria-label="当前位置">
             <button
@@ -87,7 +61,13 @@
             {{ navigationBusy ? '同步中…' : '同步 PiWeb' }}
           </button>
           <button @click="toggleCanvasMode">
-            {{ canvasMode === 'agents' ? '返回业务画布' : 'Agent 工作流关系' }}
+            {{ canvasMode === 'agents' ? '返回创作图谱' : 'Agent 运行监控' }}
+          </button>
+          <button
+            v-if="canvasMode === 'story'"
+            @click="showAllResources = !showAllResources"
+          >
+            {{ showAllResources ? '收起次要素材' : '展开全部素材' }}
           </button>
           <button @click="fit">适配画布</button>
         </div>
@@ -125,36 +105,126 @@
           </button>
         </div>
         <div v-if="!objects.length && canvasMode === 'story'" class="empty">
-          <h1>从故事到形象</h1>
-          <p>
-            先在“小说导入与分章”工作流中导入小说，再让 Agent 接续处理。<br />
-            结果会回到此画布。
-          </p>
-          <button class="primary" @click="openNovelWorkflow">
-            前往小说导入与分章 ↗
+          <h1>创作图谱</h1>
+          <p>从剧本、章节开始，逐步整理实体、提示词与影片资源。</p>
+          <button class="primary" @click="openNovelImport">
+            导入小说并生成章节
           </button>
         </div>
         <div v-if="canvasMode === 'story' && runs.length" class="run-overlay">
-          <div class="overlay-title">
-            动态执行覆盖
-            <button @click="showHistory = !showHistory">
-              {{ showHistory ? '收起历史' : '展开历史' }}
-            </button>
-          </div>
-          <button
-            v-for="run in overlayRuns"
-            :key="run.id"
-            :class="['run-chip', { active: activeRun(run) }]"
-            @click="queueInspect(run, $event)"
-            @dblclick="drillInto(run)"
-          >
-            <span>{{
-              run.status === 'failed' ? '!' : activeRun(run) ? '◉' : '✓'
-            }}</span
-            ><strong>{{ run.name }}</strong
-            ><small>{{ statusName(run.status) }}</small
-            ><span>详情 ↗</span>
+          <span>{{ visibleRunCount }} 个运行节点</span>
+          <button @click="showHistory = !showHistory">
+            {{ showHistory ? '隐藏已完成' : '显示历史运行' }}
           </button>
+        </div>
+        <div
+          v-if="contextMenu"
+          class="node-context-menu"
+          :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+          role="menu"
+          @pointerdown.stop
+          @click.stop
+          @contextmenu.prevent
+        >
+          <strong>{{
+            contextNode?.name || kindName(contextNode?.kind || '')
+          }}</strong>
+          <button role="menuitem" @click="inspectContextNode">查看属性</button>
+          <template v-if="contextNode?.kind === 'chapter'">
+            <button
+              role="menuitem"
+              @click="launchContextWorkflow('ExtractEntities')"
+            >
+              启动章节实体提取
+            </button>
+          </template>
+          <template v-else-if="contextNode?.kind === 'source'">
+            <button
+              role="menuitem"
+              @click="launchContextWorkflow('StructureNovel')"
+            >
+              打开小说结构工作流
+            </button>
+            <button role="menuitem" @click="structureSource(contextNode)">
+              识别并生成章节
+            </button>
+          </template>
+          <template v-else-if="contextNode?.kind === 'entity'">
+            <button role="menuitem" @click="inspectContextNode">
+              编辑实体信息
+            </button>
+            <button
+              role="menuitem"
+              @click="launchContextWorkflow('CreateEntity')"
+            >
+              制作概念图
+            </button>
+            <button
+              role="menuitem"
+              @click="launchContextWorkflow('GenerateThreeView')"
+            >
+              生成三视图
+            </button>
+          </template>
+          <template v-else-if="contextNode?.kind === 'proposal_item'">
+            <button
+              role="menuitem"
+              :disabled="
+                Boolean(contextNode.resolved) ||
+                !candidateCanConfirm(contextNode)
+              "
+              @click="acceptContextCandidate"
+            >
+              确认此候选
+            </button>
+            <button
+              role="menuitem"
+              :disabled="Boolean(contextNode.resolved)"
+              @click="rejectContextCandidate"
+            >
+              取消此候选
+            </button>
+            <button role="menuitem" @click="reviseContextCandidate">
+              复制修改指令并打开对话
+            </button>
+          </template>
+          <template v-else-if="contextNode?.kind === 'resource'">
+            <button
+              v-if="contextNode.role === 'concept'"
+              role="menuitem"
+              @click="confirmConcept(contextNode)"
+            >
+              确认为正式形象
+            </button>
+            <button
+              role="menuitem"
+              @click="launchContextWorkflow('CreateEntity')"
+            >
+              继续制作
+            </button>
+          </template>
+          <template v-else-if="contextNode?.kind === 'workflow_run'">
+            <button
+              v-if="contextNode.sessionId"
+              role="menuitem"
+              @click="openRunSession(contextNode)"
+            >
+              打开对应 Agent 对话
+            </button>
+          </template>
+          <template v-else-if="contextNode?.kind === 'workflow_conversation'">
+            <button role="menuitem" @click="openAgentConversation(contextNode)">
+              继续此对话
+            </button>
+          </template>
+          <template v-else-if="contextNode?.kind === 'workflow_agent'">
+            <button
+              role="menuitem"
+              @click="launchContextWorkflow(contextNode.workflowId)"
+            >
+              新建此工作流对话
+            </button>
+          </template>
         </div>
         <div class="legend">
           <template v-if="canvasMode === 'agents'">
@@ -162,7 +232,7 @@
             Pi 工作目录在项目属性中查看
           </template>
           <template v-else>
-            长期关系：实线 <span>执行绑定：虚线 · 已完成 Run 保留来源记录</span>
+            右键节点启动工作流 · 活动运行显示为节点 · 已完成运行可展开历史
           </template>
         </div>
       </div>
@@ -172,7 +242,9 @@
           ><button @click="selected = null">×</button>
         </div>
         <h2>{{ selected.name || kindName(selected.kind) }}</h2>
-        <p>{{ selected.description || selected.brief }}</p>
+        <p v-if="selected.kind !== 'entity'">
+          {{ selected.description || selected.brief }}
+        </p>
         <template v-if="selected.kind === 'agent_project'">
           <p>
             一个影片工程对应一个 Studio / Pi 项目根节点；Pi
@@ -216,6 +288,17 @@
             {{ selected.target === 'entity' ? '实体级工作流' : '工程级工作流' }}
           </p>
           <p>{{ selected.sessionCount }} 个独立对话</p>
+          <h3>最近运行</h3>
+          <button
+            v-for="run in workflowRuns(selected.workflowId)"
+            :key="run.id"
+            class="workflow-run-entry"
+            @click="selectId(run.id)"
+          >
+            {{ run.name }} · {{ statusName(run.status) }} ·
+            {{ formatAgentTime(run.createdAt) }}
+          </button>
+          <p v-if="!workflowRuns(selected.workflowId).length">暂无运行记录</p>
           <template v-if="selected.workflowId === 'StructureNovel'">
             <h3>小说导入与分章</h3>
             <button
@@ -385,8 +468,21 @@
             “小说导入与分章”工作流中操作。
           </p>
         </template>
-        <template v-if="selected.kind === 'entity'"
-          ><h3>参考元素</h3>
+        <template v-if="selected.kind === 'entity'">
+          <label>实体名称<input v-model="entityName" /></label>
+          <label>实体描述<textarea v-model="entityDescription" /></label>
+          <button class="primary" @click="saveEntityDetails">
+            保存实体信息
+          </button>
+          <h3>出现章节</h3>
+          <button
+            v-for="chapter in entityChapters(selected)"
+            :key="chapter.id"
+            @click="selectId(chapter.id)"
+          >
+            {{ chapter.name }} ↗
+          </button>
+          <h3>参考元素</h3>
           <textarea
             v-model="referenceText"
             placeholder="参考描述、风格或外观要求"
@@ -397,33 +493,54 @@
               accept="image/png"
               @change="uploadReference"
           /></label>
+          <p>正式形象：{{ selected.appearanceAssetId || '尚未确认' }}</p>
+        </template>
+        <template v-if="selected.kind === 'proposal_item'">
           <p>
-            正式形象：{{ selected.appearanceAssetId || '尚未确认' }}
-          </p></template
-        >
-        <template v-if="selected.kind === 'proposal'"
-          ><p>逐项确认关键实体；关系在两端实体确认后采用。</p>
-          <article
-            v-for="item in selected.items"
-            :key="item.key"
-            class="candidate"
+            候选来自
+            {{
+              selected.chapterName || '未关联章节'
+            }}。逐项确认后才会成为正式实体。
+          </p>
+          <button
+            v-if="selected.chapterId"
+            @click="selectId(selected.chapterId)"
           >
-            <strong>{{ item.name || item.description || item.key }}</strong
-            ><small>{{ item.kind }} · {{ item.type }}</small>
-            <p>{{ item.description }}</p>
-            <small v-for="source in item.sources" :key="source.anchorId"
-              >{{ source.anchorId }} · 来源 v{{ source.revision }}</small
-            ><button
-              :disabled="
-                Boolean(selected.resolved?.[item.key]) ||
-                selected.status !== 'pending'
-              "
-              @click="confirmCandidate(item.key)"
+            查看来源章节 ↗
+          </button>
+          <p>{{ selected.item?.kind }} · {{ selected.item?.type }}</p>
+          <p>{{ selected.item?.description }}</p>
+          <p v-if="!candidateCanConfirm(selected)" class="error">
+            {{ candidateBlockReason(selected) }}
+          </p>
+          <small v-for="source in selected.item?.sources" :key="source.anchorId"
+            >{{ source.anchorId }} · 来源 v{{ source.revision }}</small
+          >
+          <p v-if="selected.resolved">
+            {{ selected.resolved.status === 'rejected' ? '已取消' : '已确认' }}
+          </p>
+          <template v-else>
+            <button
+              class="primary"
+              :disabled="!candidateCanConfirm(selected)"
+              @click="confirmCandidate(selected)"
             >
-              {{ selected.resolved?.[item.key] ? '已确认' : '确认这一项' }}
+              确认此候选
             </button>
-          </article></template
-        >
+            <button class="danger" @click="rejectCandidate(selected)">
+              取消此候选
+            </button>
+            <button @click="reviseCandidate(selected)">
+              复制修改指令并打开对应对话
+            </button>
+          </template>
+          <button
+            v-if="selected.discussionId"
+            @click="openCandidateConversation(selected)"
+          >
+            打开来源对话 ↗
+          </button>
+        </template>
         <template v-if="selected.kind === 'resource'"
           ><img
             v-if="selected.assetId"
@@ -449,7 +566,8 @@
         >
         <template v-if="selected.kind === 'workflow_run'"
           ><p>{{ statusName(selected.status) }}</p>
-          <button @click="openRunSession(selected)">打开对应 PiWeb ↗</button
+          <button v-if="selected.sessionId" @click="openRunSession(selected)">
+            打开对应 PiWeb ↗</button
           ><button
             v-if="selected.childRunIds?.length"
             @click="viewExecution(selected)"
@@ -548,7 +666,6 @@ type AgentWorkspace = Obj & {
   conversationIds: string[]
 }
 const projects = ref<Obj[]>([]),
-  libraryOpen = ref(true),
   objects = ref<Obj[]>([]),
   project = ref<Obj>(),
   projectId = ref(
@@ -585,6 +702,7 @@ type AgentStatus = {
 const agentStates = ref<Record<string, AgentStatus>>({})
 const activeWorkflowId = ref(''),
   workflowTargets = ref<Record<string, string>>({}),
+  workflowContexts = ref<Record<string, string>>({}),
   navigationBusy = ref(false),
   workspaceUrl = ref(''),
   trustEntryOpenedFor = ref('')
@@ -596,6 +714,8 @@ const importing = ref(false),
   novelName = ref(''),
   novelText = ref(''),
   referenceText = ref(''),
+  entityName = ref(''),
+  entityDescription = ref(''),
   conceptCount = ref(2),
   allowThreeView = ref(true)
 const canvasHost = ref<HTMLElement>(),
@@ -610,6 +730,7 @@ const hoverTooltip = ref<{
   help: string
 } | null>(null)
 const invalidGlowId = ref('')
+const contextMenu = ref<{ x: number; y: number; nodeId: string } | null>(null)
 const focusId = computed(() => navigationPath.value.at(-1) || '')
 const currentObject = computed(() => objectById(focusId.value))
 const visibleObjects = computed(() =>
@@ -633,6 +754,124 @@ const entities = computed(() =>
     sessions.value.find((s) => s.id === sessionId.value)
   ),
   runs = computed(() => objects.value.filter((o) => o.kind === 'workflow_run'))
+const pendingProposalItems = computed(() =>
+  visibleObjects.value
+    .filter(
+      (proposal) =>
+        proposal.kind === 'proposal' && proposal.status === 'pending'
+    )
+    .flatMap((proposal) => {
+      const chapterId = proposal.basis?.find(
+        (ref: Obj) => ref.kind === 'chapter'
+      )?.id
+      const chapter =
+        objects.value.find((o) => o.id === chapterId) ||
+        objects.value.find(
+          (o) =>
+            o.kind === 'chapter' &&
+            proposal.items?.some((item: Obj) =>
+              item.sources?.some(
+                (source: Obj) =>
+                  source.sourceId === o.sourceId &&
+                  o.anchorIds?.includes(source.anchorId)
+              )
+            )
+        )
+      return (proposal.items || [])
+        .filter((item: Obj) => !proposal.resolved?.[item.key])
+        .map((item: Obj) => ({
+          id: `proposal-item:${proposal.id}:${encodeURIComponent(item.key)}`,
+          kind: 'proposal_item',
+          revision: proposal.revision,
+          name: item.name || item.description || item.key,
+          proposalId: proposal.id,
+          key: item.key,
+          item,
+          discussionId: proposal.discussionId,
+          workflowRunId: proposal.workflowRunId,
+          chapterId: chapter?.id || '',
+          chapterName: chapter?.name || '',
+          preview: item.description || item.name || item.key
+        }))
+    })
+)
+const visibleWorkflowRuns = computed(() => {
+  const ids = new Set(visibleObjects.value.map((o) => o.id))
+  const scope = objects.value.find((o) => o.id === focusId.value)
+  return runs.value.filter((run) => {
+    if (!showHistory.value && !activeRun(run)) return false
+    if (scope?.kind === 'workflow_run') return false
+    return (
+      !focusId.value ||
+      run.targetId === focusId.value ||
+      (run.inputs || []).some((input: Obj) => ids.has(input.id)) ||
+      (run.outputs || []).includes(focusId.value)
+    )
+  })
+})
+const visibleRunCount = computed(() => visibleWorkflowRuns.value.length)
+const canvasObjects = computed(() => [
+  ...visibleObjects.value
+    .filter((o) => o.kind !== 'proposal')
+    .map((object) => {
+      const activity = sessions.value.findLast((session) => {
+        if (session.closed) return false
+        if (session.contextId !== object.id && session.targetId !== object.id)
+          return false
+        return agentStates.value[session.id]?.working
+      })
+      if (!activity) return object
+      const definition = definitions.value.find(
+        (item) => item.id === activity.workflowId
+      )
+      const outputs: Record<string, string> = {
+        StructureNovel: '章节结构',
+        ExtractEntities: '实体候选',
+        CreateEntity: '概念图候选',
+        GenerateThreeView: '三视图资源'
+      }
+      return {
+        ...object,
+        agentActivity: `${definition?.name || activity.workflowId} · 正在工作 · 输出：${outputs[activity.workflowId] || '创作数据'}`
+      }
+    }),
+  ...pendingProposalItems.value,
+  ...visibleWorkflowRuns.value.map((run) => {
+    const session = sessions.value.find((item) => item.id === run.sessionId)
+    const state = session && agentStates.value[session.id]
+    const outputTypes: Record<string, string> = {
+      StructureNovel: '章节',
+      ExtractEntities: '实体候选',
+      CreateEntity: '概念图',
+      GenerateThreeView: '三视图'
+    }
+    const outputCount = (run.outputs || []).reduce(
+      (count: number, id: string) => {
+        const proposal = objects.value.find(
+          (item) => item.id === id && item.kind === 'proposal'
+        )
+        return count + (proposal ? proposal.items?.length || 0 : 1)
+      },
+      0
+    )
+    return {
+      ...run,
+      workflowName:
+        definitions.value.find((definition) => definition.id === run.workflowId)
+          ?.name || run.name,
+      agentWorking: Boolean(state?.working),
+      preview: `${state?.working ? 'Agent 工作中' : statusName(run.status)} · 输出 ${outputTypes[run.workflowId] || '资源'} ${outputCount} 项`
+    }
+  })
+])
+const contextNode = computed(() =>
+  contextMenu.value ? objectById(contextMenu.value.nodeId) : null
+)
+watch(selected, (object) => {
+  entityName.value = object?.kind === 'entity' ? object.name || '' : ''
+  entityDescription.value =
+    object?.kind === 'entity' ? object.description || '' : ''
+})
 const agentGraphNodes = computed<Obj[]>(() => {
   if (!project.value) return []
   const projectNodeId = `agent-project:${project.value.id}`
@@ -688,6 +927,10 @@ const agentGraphNodes = computed<Obj[]>(() => {
     const related = graphSessions.filter(
       (session) => session.workflowId === definition.id
     )
+    const relatedRuns = runs.value.filter(
+      (run) => run.workflowId === definition.id
+    )
+    const activeRuns = relatedRuns.filter(activeRun)
     const workspaceIds = new Set<string>()
     for (const session of related) {
       const binding = bindings.find(
@@ -713,7 +956,7 @@ const agentGraphNodes = computed<Obj[]>(() => {
       ),
       workspaceIds: [...workspaceIds],
       status: related.length ? '已建立对话' : '未开始',
-      preview: `${related.length} 个对话 · ${related.filter((session) => agentStates.value[session.id]?.working).length} 个工作中 · ${definition.target === 'entity' ? '按实体区分' : '工程级'}`
+      preview: `${related.length} 个对话 · ${activeRuns.length} 个运行中/待确认 · ${related.filter((session) => agentStates.value[session.id]?.working).length} 个 Agent 工作中`
     }
   })
   const conversationNodes = graphSessions.map((session) => {
@@ -743,7 +986,10 @@ const agentGraphNodes = computed<Obj[]>(() => {
       id: `agent-conversation:${session.id}`,
       kind: 'workflow_conversation',
       revision: session.revision,
-      name: `${definition?.name || session.workflowId} · ${target?.name || '工程'} · ${session.id.slice(0, 8)}`,
+      name:
+        state?.sessionName ||
+        session.name ||
+        `${definition?.name || session.workflowId} · ${target?.name || '工程'}`,
       workflowId: session.workflowId,
       workflowSessionId: session.id,
       discussionId: session.discussionId,
@@ -763,6 +1009,7 @@ const agentGraphNodes = computed<Obj[]>(() => {
       sessionRecord: session,
       preview: [
         statusName(status),
+        state?.sessionName || session.name || '',
         session.goal || state?.firstMessage || '',
         state?.messageCount == null
           ? '消息数待同步'
@@ -800,17 +1047,17 @@ const agentGraphNodes = computed<Obj[]>(() => {
 })
 const activeRun = (run: Obj) =>
   !['succeeded', 'failed', 'cancelled'].includes(run.status)
-const overlayRuns = computed(() =>
-  runs.value.filter((r) => showHistory.value || activeRun(r)).slice(-12)
-)
 const objectById = (id: string) =>
   objects.value.find((o) => o.id === id) ||
+  pendingProposalItems.value.find((o) => o.id === id) ||
   agentGraphNodes.value.find((o) => o.id === id)
 const contentUrl = (id: string) => `/studio-api/v1/assets/${id}/content`
 const names: Record<string, string> = {
   agent_project: 'Studio / Pi 项目',
   workflow_agent: 'Workflow Agent',
   workflow_conversation: 'Agent 对话',
+  proposal_item: '待确认候选',
+  execution_relation: '运行来源',
   chapter: '章节',
   scene: '场景',
   entity: '实体',
@@ -841,6 +1088,11 @@ const names: Record<string, string> = {
 const kindName = (kind: string) => names[kind] || kind
 const statusName = (status?: string) =>
   status ? names[status] || status : '未开始'
+const workflowRuns = (workflowId: string) =>
+  runs.value
+    .filter((run) => run.workflowId === workflowId)
+    .slice(-6)
+    .reverse()
 const formatAgentTime = (value?: string | null) => {
   if (!value) return '未记录'
   const date = new Date(value)
@@ -934,6 +1186,7 @@ async function openProject() {
     await refresh()
     activeWorkflowId.value = ''
     workflowTargets.value = {}
+    workflowContexts.value = {}
     const route = readRoute(location.hash)
     navigationPath.value =
       route?.projectId === projectId.value
@@ -961,7 +1214,7 @@ async function openProject() {
   }
 }
 async function newProject() {
-  const name = window.prompt('影片工程名称')
+  const name = window.prompt('创作工程名称')
   if (!name?.trim()) return
   try {
     const p = await studioApi('/projects', { name, requestId: requestId() })
@@ -1087,19 +1340,6 @@ function nodePreview(o: Obj) {
 function toggleCanvasMode() {
   switchCanvasMode(canvasMode.value === 'story' ? 'agents' : 'story')
 }
-async function openNovelWorkflow() {
-  if (!projectId.value) {
-    showError(new Error('请先选择影片工程'))
-    return
-  }
-  switchCanvasMode('agents')
-  await nextTick()
-  const workflow = agentGraphNodes.value.find(
-    (node) =>
-      node.kind === 'workflow_agent' && node.workflowId === 'StructureNovel'
-  )
-  if (workflow) select(workflow)
-}
 function openNovelImport() {
   if (!projectId.value) {
     agentError.value = '请先选择影片工程。'
@@ -1123,8 +1363,117 @@ function selectId(id: string) {
   const o = objectById(id)
   if (o) select(o)
 }
+function inspectContextNode() {
+  if (contextNode.value) select(contextNode.value)
+  contextMenu.value = null
+}
+async function launchContextWorkflow(workflowId: string) {
+  const node = contextNode.value
+  contextMenu.value = null
+  if (!node) return
+  const definition = definitions.value.find((item) => item.id === workflowId)
+  const contextId = node.kind.startsWith('workflow_')
+    ? undefined
+    : node.kind === 'resource'
+      ? node.entityId || node.id
+      : node.id
+  const entityId =
+    node.kind === 'entity'
+      ? node.id
+      : node.kind === 'resource'
+        ? node.entityId
+        : undefined
+  if (definition?.target === 'entity' && !entityId) {
+    selected.value = node
+    agentError.value = '请先在属性面板选择目标实体，再创建对话。'
+    return
+  }
+  workflowContexts.value[workflowId] = contextId || ''
+  if (definition?.target === 'entity' && entityId)
+    workflowTargets.value[workflowId] = entityId
+  await enterWorkflow(workflowId, entityId, contextId)
+}
+async function acceptContextCandidate() {
+  const candidate = contextNode.value
+  contextMenu.value = null
+  if (candidate?.kind === 'proposal_item') await confirmCandidate(candidate)
+}
+async function rejectContextCandidate() {
+  const candidate = contextNode.value
+  contextMenu.value = null
+  if (candidate?.kind === 'proposal_item') await rejectCandidate(candidate)
+}
+async function reviseContextCandidate() {
+  const candidate = contextNode.value
+  contextMenu.value = null
+  if (candidate?.kind === 'proposal_item') await reviseCandidate(candidate)
+}
+async function openCandidateConversation(candidate: Obj) {
+  const session = sessions.value.find(
+    (item) => item.discussionId === candidate.discussionId && !item.closed
+  )
+  if (!session) {
+    showError(new Error('找不到产生此候选的 Agent 对话。'))
+    return
+  }
+  await openAgentConversation({
+    id: `agent-conversation:${session.id}`,
+    kind: 'workflow_conversation',
+    revision: session.revision,
+    workflowSessionId: session.id
+  })
+}
+async function reviseCandidate(candidate: Obj) {
+  const item = candidate.item || {}
+  const instruction = [
+    `请只修改候选「${candidate.name}」（key: ${candidate.key}），不要重做其他候选。`,
+    `来源章节：${candidate.chapterName || '未关联章节'}。`,
+    `当前描述：${item.description || '（空）'}`,
+    `当前来源锚点：${(item.sources || []).map((source: Obj) => source.anchorId).join('、') || '无'}`,
+    '请在 PiWeb 中围绕这个候选继续讨论；收到我的修改要求后，提交修订候选供我重新审核，不要直接改动正式实体。保留可验证的来源锚点。'
+  ].join('\n')
+  const opening = openCandidateConversation(candidate)
+  try {
+    await navigator.clipboard.writeText(instruction)
+  } catch (e) {
+    await opening
+    showError(e)
+    return
+  }
+  await opening
+  syncMessage.value =
+    '已复制该候选的修改指令，请在 PiWeb 对话中粘贴并补充要求。'
+}
+function candidateCanConfirm(candidate: Obj) {
+  const item = candidate.item || {}
+  if (item.kind === 'image_input') return false
+  if (!['relation', 'entity_use'].includes(item.kind)) return true
+  const proposal = objects.value.find(
+    (object) => object.id === candidate.proposalId
+  )
+  const resolve = (key: string) => proposal?.resolved?.[key]?.objectId || key
+  const endpointIds =
+    item.kind === 'relation' ? [item.from, item.to] : [item.entityId]
+  return endpointIds.every((id: string) =>
+    objects.value.some(
+      (object) => object.id === resolve(id) && object.kind === 'entity'
+    )
+  )
+}
+function candidateBlockReason(candidate: Obj) {
+  if (candidate.item?.kind === 'image_input')
+    return '图片输入的采用操作尚未接通。'
+  if (['relation', 'entity_use'].includes(candidate.item?.kind))
+    return '请先确认这条关系所引用的人物或实体。'
+  return ''
+}
 function selectOutput(id: string) {
-  const o = resources.value.find((r) => r.assetId === id) || objectById(id)
+  const persisted = objectById(id)
+  const o =
+    resources.value.find((r) => r.assetId === id) ||
+    (persisted?.kind === 'proposal'
+      ? pendingProposalItems.value.find((item) => item.proposalId === id)
+      : persisted)
   if (o) select(o)
 }
 function mouseHistory(event: MouseEvent) {
@@ -1161,6 +1510,29 @@ function sourceChapterCount(sourceId: string) {
       !object.supersededBy
   ).length
 }
+function entityChapters(entity: Obj) {
+  const linked = new Set(
+    objects.value
+      .filter(
+        (object) =>
+          object.kind === 'data_relation' &&
+          object.type === 'mentions' &&
+          object.toId === entity.id
+      )
+      .map((relation) => relation.fromId)
+  )
+  return objects.value.filter(
+    (chapter) =>
+      chapter.kind === 'chapter' &&
+      !chapter.supersededBy &&
+      (linked.has(chapter.id) ||
+        (entity.sources || []).some(
+          (source: Obj) =>
+            source.sourceId === chapter.sourceId &&
+            chapter.anchorIds?.includes(source.anchorId)
+        ))
+  )
+}
 async function loadNovelFile(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (file) {
@@ -1183,6 +1555,7 @@ async function importNovel() {
   }
 }
 async function structureSource(source: Obj) {
+  contextMenu.value = null
   try {
     await studioApi(`/projects/${projectId.value}/novels`, {
       sourceId: source.id,
@@ -1208,10 +1581,12 @@ function workflowTarget(workflowId: string): string {
   )
 }
 function workflowSession(workflowId: string) {
+  const contextId = workflowContexts.value[workflowId] || null
   return sessions.value.findLast(
     (s) =>
       s.workflowId === workflowId &&
       s.targetId === workflowTarget(workflowId) &&
+      (s.contextId || null) === contextId &&
       !s.closed
   )
 }
@@ -1227,7 +1602,7 @@ function workflowBinding(workflowId: string) {
 function workspaceTrustPending(workflowId: string) {
   return workflowBinding(workflowId)?.status === 'guard_unverified'
 }
-async function prepareWorkflow(workflowId: string) {
+async function prepareWorkflow(workflowId: string, contextId?: string) {
   if (!projectId.value) throw new Error('请先选择工程')
   const definition = definitions.value.find((d) => d.id === workflowId)!
   const targetId = workflowTarget(workflowId)
@@ -1238,6 +1613,7 @@ async function prepareWorkflow(workflowId: string) {
   return (await studioApi(`/projects/${projectId.value}/workflow-sessions`, {
     workflowId,
     targetId,
+    contextId: contextId || workflowContexts.value[workflowId] || null,
     requestId: requestId()
   })) as Obj
 }
@@ -1252,6 +1628,7 @@ async function createWorkflowConversation(workflowId: string) {
       {
         workflowId,
         targetId,
+        contextId: workflowContexts.value[workflowId] || null,
         newInstance: true,
         requestId: requestId()
       }
@@ -1267,9 +1644,14 @@ async function createWorkflowConversation(workflowId: string) {
     agentError.value = e instanceof Error ? e.message : String(e)
   }
 }
-async function enterWorkflow(workflowId: string, entityId?: string) {
+async function enterWorkflow(
+  workflowId: string,
+  entityId?: string,
+  contextId?: string
+) {
   if (navigationBusy.value) return
   if (entityId) workflowTargets.value[workflowId] = entityId
+  workflowContexts.value[workflowId] = contextId || ''
   const canContinueAfterTrust =
     workspaceTrustPending(workflowId) &&
     trustEntryOpenedFor.value === workflowId
@@ -1363,7 +1745,7 @@ async function enterWorkflow(workflowId: string, entityId?: string) {
   const tab = window.open('about:blank', '_blank')
   navigationBusy.value = true
   try {
-    const session = await prepareWorkflow(workflowId)
+    const session = await prepareWorkflow(workflowId, contextId)
     await refresh()
     sessionId.value = session.id
     await navigatePiWeb(session, tab)
@@ -1522,15 +1904,56 @@ async function authorizeWorkflow(sessionIdOverride = sessionId.value) {
     showError(e)
   }
 }
-async function confirmCandidate(key: string) {
-  const p = selected.value!
+async function confirmCandidate(candidate: Obj) {
+  const p = objects.value.find((item) => item.id === candidate.proposalId)
+  if (!p) return
   try {
     await studioApi(`/proposals/${p.id}/adopt`, {
       expectedHash: p.contentHash,
-      selectedKeys: [key],
+      selectedKeys: [candidate.key],
       requestId: requestId()
     })
     await refresh()
+    selected.value = null
+  } catch (e) {
+    showError(e)
+  }
+}
+async function rejectCandidate(candidate: Obj) {
+  const proposal = objects.value.find(
+    (item) => item.id === candidate.proposalId
+  )
+  if (!proposal) return
+  try {
+    await studioApi(`/proposals/${proposal.id}/reject-candidate`, {
+      key: candidate.key,
+      expectedHash: proposal.contentHash,
+      requestId: requestId()
+    })
+    await refresh()
+    selected.value = null
+  } catch (e) {
+    showError(e)
+  }
+}
+async function saveEntityDetails() {
+  const entity = selected.value
+  if (entity?.kind !== 'entity') return
+  if (!entityName.value.trim()) {
+    showError(new Error('实体名称不能为空。'))
+    return
+  }
+  try {
+    await studioApi(`/objects/${entity.id}`, {
+      expectedRevision: entity.revision,
+      fields: {
+        name: entityName.value.trim(),
+        description: entityDescription.value.trim()
+      },
+      requestId: requestId()
+    })
+    await refresh()
+    syncMessage.value = '实体信息已更新。'
   } catch (e) {
     showError(e)
   }
@@ -1589,6 +2012,7 @@ async function openRunSession(run: Obj) {
   if (session) {
     activeWorkflowId.value = session.workflowId
     workflowTargets.value[session.workflowId] = session.targetId
+    workflowContexts.value[session.workflowId] = session.contextId || ''
   }
   await openPiWeb()
 }
@@ -1641,6 +2065,7 @@ async function openAgentConversation(node: Obj) {
   sessionId.value = session.id
   activeWorkflowId.value = session.workflowId
   workflowTargets.value[session.workflowId] = session.targetId
+  workflowContexts.value[session.workflowId] = session.contextId || ''
   if (
     workspaceTrustPending(session.workflowId) &&
     trustEntryOpenedFor.value !== session.workflowId
@@ -1751,7 +2176,7 @@ function projectGraph() {
   }
   graph.clear()
   const chapterParents = objectHierarchy(objects.value)
-  const visible = visibleObjects.value
+  const visible = canvasObjects.value
   // Lay out a spanning forest; cross references remain edges, never duplicate nodes.
   const byId = new Map(visible.map((o) => [o.id, o]))
   const children = new Map<string, Obj[]>()
@@ -1760,7 +2185,13 @@ function projectGraph() {
     let parentId =
       o.kind === 'chapter'
         ? chapterParents.get(o.id)
-        : o.chapterId || o.entityId
+        : o.kind === 'workflow_run'
+          ? o.inputs?.find((input: Obj) => byId.has(input.id))?.id
+          : o.kind === 'proposal_item'
+            ? byId.has(o.workflowRunId)
+              ? o.workflowRunId
+              : o.chapterId
+            : o.chapterId || o.entityId
     if (o.kind === 'entity') {
       parentId = objects.value.find(
         (r) =>
@@ -1804,13 +2235,28 @@ function projectGraph() {
     )
     n.id = toNodeId(o.id)
     n.pos = positions.get(o.id)!
-    n.size = [320, o.assetId ? 240 : 150]
+    n.size = [
+      320,
+      o.assetId
+        ? 240
+        : o.kind === 'proposal_item'
+          ? 170
+          : o.kind === 'workflow_run'
+            ? 145
+            : 150
+    ]
     n.color =
       o.kind === 'entity'
         ? '#245853'
-        : o.kind === 'proposal'
+        : o.kind === 'proposal_item'
           ? '#665231'
-          : '#2a3e52'
+          : o.kind === 'workflow_run'
+            ? o.status === 'failed'
+              ? '#713e3c'
+              : activeRun(o)
+                ? '#455b70'
+                : '#354c48'
+            : '#2a3e52'
     n.bgcolor = '#152431'
     n.addInput('', '*')
     n.addOutput('', '*')
@@ -1871,10 +2317,16 @@ function projectGraph() {
       ctx.fillStyle = '#9eb4c4'
       ctx.font = '12px system-ui'
       ctx.fillText(
-        `${kindName(o.kind)} · ${o.role || kindName(o.type || '')}`,
+        o.kind === 'workflow_run'
+          ? `${o.agentWorking ? '◉ Agent 工作中' : statusName(o.status)} · ${o.workflowName || o.name}`
+          : `${kindName(o.kind)} · ${o.role || kindName(o.item?.type || o.type || '')}`,
         14,
         40
       )
+      if (o.agentActivity) {
+        ctx.fillStyle = '#8fd1ae'
+        ctx.fillText(`◉ ${o.agentActivity}`, 14, 58, 286)
+      }
       if (!o.assetId) {
         ctx.fillStyle = '#d4e0e6'
         ctx.font = '12px system-ui'
@@ -1891,7 +2343,12 @@ function projectGraph() {
         lines
           .slice(0, 4)
           .forEach((text, index) =>
-            ctx.fillText(text, 14, 72 + index * 17, 286)
+            ctx.fillText(
+              text,
+              14,
+              (o.agentActivity ? 88 : 72) + index * 17,
+              286
+            )
           )
       }
       ctx.restore()
@@ -1908,6 +2365,22 @@ function projectGraph() {
       )
   )
   for (const o of visible) {
+    if (o.kind === 'entity')
+      for (const chapter of visible.filter((item) => item.kind === 'chapter'))
+        if (
+          (o.sources || []).some(
+            (source: Obj) =>
+              source.sourceId === chapter.sourceId &&
+              chapter.anchorIds?.includes(source.anchorId)
+          )
+        )
+          edges.push({
+            id: `${chapter.id}:entity:${o.id}`,
+            kind: 'data_relation',
+            revision: 1,
+            fromId: chapter.id,
+            toId: o.id
+          })
     if (o.kind === 'chapter' && o.sourceId)
       edges.push({
         id: o.id + ':source',
@@ -1918,7 +2391,7 @@ function projectGraph() {
           : o.sourceId,
         toId: o.id
       })
-    if (o.chapterId)
+    if (o.chapterId && o.kind !== 'proposal_item')
       edges.push({
         id: o.id + ':chapter',
         kind: 'data_relation',
@@ -1934,6 +2407,33 @@ function projectGraph() {
         fromId: o.entityId,
         toId: o.id
       })
+  }
+  for (const run of visible.filter((o) => o.kind === 'workflow_run')) {
+    for (const input of run.inputs || [])
+      if (byId.has(input.id))
+        edges.push({
+          id: `${run.id}:input:${input.id}`,
+          kind: 'execution_relation',
+          revision: 1,
+          fromId: input.id,
+          toId: run.id
+        })
+    for (const outputId of run.outputs || []) {
+      const candidates = visible.filter(
+        (o) => o.kind === 'proposal_item' && o.proposalId === outputId
+      )
+      const targets = candidates.length ? candidates : [byId.get(outputId)]
+      for (const target of targets) {
+        if (!target) continue
+        edges.push({
+          id: `${run.id}:output:${target.id}`,
+          kind: 'execution_relation',
+          revision: 1,
+          fromId: run.id,
+          toId: target.id
+        })
+      }
+    }
   }
   const connected = new Set<string>()
   for (const edge of edges) {
@@ -1980,7 +2480,7 @@ function projectAgentGraph() {
     )?.name
     const title =
       node.kind === 'workflow_conversation'
-        ? `${workflowName || '对话'} · ${node.workflowSessionId.slice(0, 6)}`
+        ? node.sessionName || node.name || `${workflowName || '对话'}`
         : node.name
     const n = new LGraphNode(
       title && title.length > 24
@@ -2060,7 +2560,15 @@ function saveView() {
   viewTimer = setTimeout(rememberView, 250)
 }
 watch(
-  [objects, focusId, showAllResources, canvasMode, agentGraphNodes],
+  [
+    objects,
+    focusId,
+    showAllResources,
+    showHistory,
+    canvasMode,
+    agentGraphNodes,
+    canvasObjects
+  ],
   projectGraph
 )
 onMounted(async () => {
@@ -2105,34 +2613,31 @@ onMounted(async () => {
   }
   canvas.allow_dragnodes = false
   canvas.allow_searchbox = false
-  canvas.onDrawForeground = (ctx) => {
-    ctx.save()
-    ctx.setLineDash([7, 7])
-    ctx.strokeStyle = '#d7ad62'
-    ctx.globalAlpha = 0.55
-    for (const run of overlayRuns.value.filter(activeRun)) {
-      const from = graph.getNodeById(toNodeId(run.targetId))
-      if (!from) continue
-      for (const id of run.outputs || []) {
-        const resource = resources.value.find((r) => r.assetId === id),
-          to = resource && graph.getNodeById(toNodeId(resource.id))
-        if (to) {
-          ctx.beginPath()
-          ctx.moveTo(from.pos[0] + 320, from.pos[1] + 90)
-          ctx.lineTo(to.pos[0], to.pos[1] + 90)
-          ctx.stroke()
-        }
-      }
-    }
-    ctx.restore()
-  }
+  canvas.onDrawForeground = () => {}
   resizeObserver = new ResizeObserver(resize)
   resizeObserver.observe(canvasHost.value!)
   window.addEventListener('resize', resize)
   canvasElement.value!.addEventListener('pointerdown', (event) => {
     clearTimeout(inspectTimer)
+    if (event.button !== 2) contextMenu.value = null
     pointerStart = { x: event.clientX, y: event.clientY }
     pointerDragged = false
+  })
+  canvasElement.value!.addEventListener('contextmenu', (event) => {
+    event.preventDefault()
+    const [x, y] = canvas.convertEventToCanvasOffset(event)
+    const node = hitCanvasNode(graph.nodes, x, y)
+    const object = node && objectById(String(node.id))
+    if (!object) {
+      contextMenu.value = null
+      return
+    }
+    const rect = canvasHost.value!.getBoundingClientRect()
+    contextMenu.value = {
+      nodeId: object.id,
+      x: Math.max(8, Math.min(event.clientX - rect.left, rect.width - 290)),
+      y: Math.max(8, Math.min(event.clientY - rect.top, rect.height - 320))
+    }
   })
   canvasElement.value!.addEventListener('pointermove', (event) => {
     if (
@@ -2154,11 +2659,11 @@ onMounted(async () => {
         name: object.name || kindName(object.kind),
         help:
           canvasMode.value === 'agents'
-            ? '单击查看详情 · 在属性面板中跳转和操作'
+            ? '单击查看详情 · 右键使用快捷操作'
             : object.id !== focusId.value &&
                 canDrill(objects.value, object.id, showAllResources.value)
-              ? '单击查看详情 · 双击进入下级'
-              : '单击查看详情 · 当前对象没有可进入的下级'
+              ? '单击查看详情 · 双击进入下级 · 右键启动工作流'
+              : '单击查看详情 · 右键查看可用操作'
       }
     } else hoverTooltip.value = null
   })
@@ -2167,6 +2672,7 @@ onMounted(async () => {
   })
   canvasElement.value!.addEventListener('click', (event) => {
     if (pointerDragged || event.button !== 0) return
+    contextMenu.value = null
     const [x, y] = canvas.convertEventToCanvasOffset(event)
     const node = hitCanvasNode(graph.nodes, x, y)
     if (node) {
@@ -2221,24 +2727,21 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   display: grid;
-  grid-template-columns: 290px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   background: #101b25;
   color: var(--ink);
   font: 13px/1.6 system-ui;
 }
-.library-collapsed {
-  grid-template-columns: minmax(0, 1fr);
-}
 .floating-brand {
   position: absolute;
   z-index: 20;
   top: 12px;
-  left: 302px;
+  left: 12px;
   display: flex;
   align-items: center;
   gap: 9px;
-  max-width: min(360px, calc(100vw - 24px));
+  max-width: min(520px, calc(100vw - 24px));
   padding: 6px 8px 6px 11px;
   border: 1px solid #344b5b;
   border-radius: 10px;
@@ -2246,32 +2749,25 @@ onBeforeUnmount(() => {
   box-shadow: 0 5px 18px rgb(0 0 0 / 24%);
   backdrop-filter: blur(10px);
 }
-.library-collapsed .floating-brand {
-  left: 12px;
-}
 .brand-mark {
   color: #94c8b1;
   font-size: 16px;
 }
 .brand-project {
-  overflow: hidden;
   color: #e2eaf0;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+}
+.floating-brand select {
+  width: min(300px, 55vw);
+  padding: 5px 8px;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.library-toggle {
-  flex: 0 0 auto;
-  padding: 2px 8px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font-size: 20px;
-  line-height: 1.2;
-}
-.library-toggle:hover {
-  color: var(--ink);
+.floating-brand button {
+  padding: 4px 9px;
 }
 .version {
   color: var(--muted);
@@ -2386,11 +2882,8 @@ nav small {
   height: auto;
   min-height: 70px;
   flex-wrap: wrap;
-  padding-left: 12px;
+  padding-left: 420px;
   padding-right: 12px;
-}
-.workspace:not(.library-collapsed) .canvas-navigation {
-  padding-left: 302px;
 }
 .navigation-location {
   flex: 1;
@@ -2497,6 +2990,35 @@ nav small {
 .canvas-tooltip span {
   color: #a8bbc8;
 }
+.node-context-menu {
+  position: absolute;
+  z-index: 30;
+  display: grid;
+  gap: 3px;
+  min-width: 220px;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: 7px;
+  border: 1px solid #486173;
+  border-radius: 9px;
+  background: #14232ff5;
+  box-shadow: 0 10px 30px #000a;
+}
+.node-context-menu strong {
+  overflow: hidden;
+  padding: 5px 8px 7px;
+  color: #c4d2dc;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.node-context-menu button {
+  border: 0;
+  text-align: left;
+  background: transparent;
+}
+.node-context-menu button:hover:not(:disabled) {
+  background: #294657;
+}
 .empty {
   position: absolute;
   left: 15%;
@@ -2527,47 +3049,14 @@ nav small {
 }
 .run-overlay {
   position: absolute;
-  right: 15px;
-  top: 15px;
-  max-width: 340px;
-}
-.overlay-title {
-  color: var(--muted);
-  font-size: 10px;
-  text-align: right;
-}
-.overlay-title button {
-  padding: 3px 6px;
-  margin-left: 10px;
-  font-size: 10px;
-}
-.run-chip {
+  z-index: 3;
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  margin-top: 8px;
-  padding: 9px 12px;
-  background: #192a35e8;
-  font-size: 11px;
-  opacity: 0.65;
-}
-.run-chip.active {
-  opacity: 1;
-  border-color: #6d6544;
-}
-.run-chip strong {
-  font-weight: 500;
-}
-.run-chip small {
-  margin-left: auto;
-}
-.run-chip > span:first-child {
-  color: #89bfa8;
-}
-.run-chip.active > span:first-child {
-  color: #d0b56a;
-  animation: pulse 1.5s infinite;
+  right: 15px;
+  top: 15px;
+  color: var(--muted);
+  font-size: 10px;
 }
 @keyframes pulse {
   50% {
@@ -2610,6 +3099,11 @@ nav small {
 .inspector button {
   margin: 6px 4px 6px 0;
   font-size: 11px;
+}
+.inspector .workflow-run-entry {
+  display: block;
+  width: 100%;
+  text-align: left;
 }
 .inspector .workspace-path-link {
   margin: 0;
@@ -2713,5 +3207,18 @@ nav small {
 }
 .execution-modal :deep(.native-workflow) {
   top: 50px;
+}
+@media (max-width: 900px) {
+  .floating-brand {
+    top: 8px;
+    padding: 4px 6px;
+  }
+  .floating-brand select {
+    width: min(240px, 52vw);
+  }
+  .canvas-navigation {
+    padding-top: 62px;
+    padding-left: 12px;
+  }
 }
 </style>

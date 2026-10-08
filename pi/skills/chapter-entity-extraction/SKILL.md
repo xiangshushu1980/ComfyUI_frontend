@@ -36,6 +36,8 @@ Every candidate must include at least one source anchor from this chapter. Use t
 { "sourceId": "...", "revision": 1, "anchorId": "P3" }
 ```
 
+Before submission, cross-check provenance item by item: the candidate's `sources` must collectively support every factual claim in its `description`, not just the entity's name. If the description labels facts with paragraph IDs such as `(P3、P7)`, those same anchors must appear in `sources`; do not put an anchor ID in prose unless it is attached to that candidate. Include P8 as well if describing the backpack compartment, which is mentioned there. Prefer removing an unnecessary detail over keeping an unsupported claim. Re-read the cited anchors when there is any doubt.
+
 Submit one `workflow_operation` with `operation: "propose_entities"` and parameters containing `requestId`, `chapterId`, and `items`. Keep the proposal focused and at or below 40 items. Entity items use:
 
 ```json

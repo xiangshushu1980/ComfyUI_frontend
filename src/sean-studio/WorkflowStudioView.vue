@@ -157,13 +157,7 @@
               role="menuitem"
               @click="launchContextWorkflow('CreateEntity')"
             >
-              制作概念图
-            </button>
-            <button
-              role="menuitem"
-              @click="launchContextWorkflow('GenerateThreeView')"
-            >
-              生成三视图
+              开始实体制作流程
             </button>
           </template>
           <template v-else-if="contextNode?.kind === 'proposal_item'">
@@ -219,6 +213,7 @@
           </template>
           <template v-else-if="contextNode?.kind === 'workflow_agent'">
             <button
+              v-if="!contextNode.deprecated"
               role="menuitem"
               @click="launchContextWorkflow(contextNode.workflowId)"
             >
@@ -345,7 +340,7 @@
             </button>
           </div>
           <p v-if="!selected.workspaceIds.length">运行目录：尚未关联工作区</p>
-          <label v-if="selected.target === 'entity'"
+          <label v-if="selected.target === 'entity' && !selected.deprecated"
             >目标实体
             <select v-model="workflowTargets[selected.workflowId]">
               <option value="">选择目标实体</option>
@@ -359,6 +354,7 @@
             </select>
           </label>
           <button
+            v-if="!selected.deprecated"
             :disabled="navigationBusy"
             @click="createWorkflowConversation(selected.workflowId)"
           >
@@ -391,34 +387,6 @@
           <pre v-if="selected.summary" class="agent-node-summary">{{
             selected.summary
           }}</pre>
-          <template
-            v-if="
-              ['CreateEntity', 'GenerateThreeView'].includes(
-                selected.workflowId
-              )
-            "
-          >
-            <h3>本次流程授权</h3>
-            <label v-if="selected.workflowId === 'CreateEntity'">
-              概念候选数
-              <select v-model.number="conceptCount">
-                <option v-for="n in [0, 1, 2, 3, 4]" :key="n" :value="n">
-                  {{ n }}
-                </option>
-              </select>
-            </label>
-            <label class="toggle">
-              <input v-model="allowThreeView" type="checkbox" />
-              {{
-                selected.workflowId === 'CreateEntity'
-                  ? '确认形象后自动生成三视图'
-                  : '授权生成三视图'
-              }}
-            </label>
-            <button @click="authorizeWorkflow(selected.workflowSessionId)">
-              授权有限流程
-            </button>
-          </template>
           <button
             :disabled="navigationBusy || selected.status === 'session_missing'"
             @click="openAgentConversation(selected)"
@@ -541,9 +509,16 @@
             打开来源对话 ↗
           </button>
         </template>
-        <template v-if="selected.kind === 'resource'"
-          ><img
-            v-if="selected.assetId"
+        <template v-if="selected.kind === 'resource'">
+          <audio
+            v-if="selected.type === 'audio' && selected.assetId"
+            :src="contentUrl(selected.assetId)"
+            controls
+            preload="none"
+            class="resource-audio"
+          />
+          <img
+            v-else-if="selected.assetId"
             :src="contentUrl(selected.assetId)"
             class="resource-image"
           />
@@ -556,20 +531,27 @@
           >
             确认正式形象 · 继续已授权三视图</button
           ><button
+            v-if="selected.role === 'voice_candidate'"
+            class="primary"
+            @click="confirmVoice(selected)"
+          >
+            选为当前人物声音
+          </button>
+          <button
             v-if="selected.workflowRunId"
             @click="selectId(selected!.workflowRunId)"
           >
             查看来源 Run</button
           ><button @click="enterResourceSession(selected)">
             继续对应 PiWeb ↗
-          </button></template
-        >
+          </button>
+        </template>
         <template v-if="selected.kind === 'workflow_run'"
           ><p>{{ statusName(effectiveRunStatus(selected)) }}</p>
           <button v-if="selected.sessionId" @click="openRunSession(selected)">
             打开对应 PiWeb ↗</button
           ><button
-            v-if="selected.childRunIds?.length"
+            v-if="selected.childRunIds?.length && selected.stage !== 'voice'"
             @click="viewExecution(selected)"
           >
             查看底层固定流程
@@ -715,9 +697,7 @@ const importing = ref(false),
   novelText = ref(''),
   referenceText = ref(''),
   entityName = ref(''),
-  entityDescription = ref(''),
-  conceptCount = ref(2),
-  allowThreeView = ref(true)
+  entityDescription = ref('')
 const canvasHost = ref<HTMLElement>(),
   canvasElement = ref<HTMLCanvasElement>(),
   native = ref<InstanceType<typeof NativeWorkflow>>(),
@@ -827,7 +807,7 @@ const canvasObjects = computed(() => [
       const outputs: Record<string, string> = {
         StructureNovel: '章节结构',
         ExtractEntities: '实体候选',
-        CreateEntity: '概念图候选',
+        CreateEntity: '实体制作资源',
         GenerateThreeView: '三视图资源'
       }
       return {
@@ -842,7 +822,7 @@ const canvasObjects = computed(() => [
     const outputTypes: Record<string, string> = {
       StructureNovel: '章节',
       ExtractEntities: '实体候选',
-      CreateEntity: '概念图',
+      CreateEntity: '实体制作',
       GenerateThreeView: '三视图'
     }
     return {
@@ -941,6 +921,7 @@ const agentGraphNodes = computed<Obj[]>(() => {
       revision: 1,
       name: definition.name,
       workflowId: definition.id,
+      deprecated: definition.deprecated === true,
       target: definition.target,
       sessionCount: related.length,
       conversationIds: related.map(
@@ -1094,7 +1075,13 @@ function runOutputSummary(run: Obj, outputType: string) {
     },
     0
   )
-  return `输出 ${outputType} ${outputCount} 项`
+  const stageType =
+    run.stage === 'voice'
+      ? '人物声音样音'
+      : run.stage === 'threeview'
+        ? '三视图资源'
+        : outputType
+  return `输出 ${stageType} ${outputCount} 项`
 }
 const activeRun = (run: Obj) =>
   !['succeeded', 'failed', 'cancelled'].includes(effectiveRunStatus(run))
@@ -1442,6 +1429,21 @@ async function launchContextWorkflow(workflowId: string) {
   workflowContexts.value[workflowId] = contextId || ''
   if (definition?.target === 'entity' && entityId)
     workflowTargets.value[workflowId] = entityId
+  if (workflowId === 'CreateEntity') {
+    try {
+      const session = await prepareWorkflow(workflowId, contextId)
+      await studioApi(`/workflow-sessions/${session.id}/authorize`, {
+        confirmed: true,
+        conceptCount: 2,
+        threeView: true,
+        voice: objectById(entityId!)?.type === 'character',
+        requestId: requestId()
+      })
+    } catch (e) {
+      showError(e)
+      return
+    }
+  }
   await enterWorkflow(workflowId, entityId, contextId)
 }
 async function acceptContextCandidate() {
@@ -1684,6 +1686,16 @@ async function createWorkflowConversation(workflowId: string) {
         requestId: requestId()
       }
     )
+    if (workflowId === 'CreateEntity') {
+      const target = objectById(targetId)
+      await studioApi(`/workflow-sessions/${session.id}/authorize`, {
+        confirmed: true,
+        conceptCount: 2,
+        threeView: true,
+        voice: target?.type === 'character',
+        requestId: requestId()
+      })
+    }
     await refresh()
     activeWorkflowId.value = workflowId
     sessionId.value = session.id
@@ -1938,23 +1950,6 @@ async function refreshAgent() {
       selected.value
   }
 }
-async function authorizeWorkflow(sessionIdOverride = sessionId.value) {
-  const s = sessions.value.find((session) => session.id === sessionIdOverride)
-  if (!s) return
-  try {
-    await studioApi(`/workflow-sessions/${s.id}/authorize`, {
-      confirmed: true,
-      conceptCount:
-        s.workflowId === 'GenerateThreeView' ? 0 : conceptCount.value,
-      threeView: allowThreeView.value,
-      requestId: requestId()
-    })
-    agentError.value = ''
-    await refresh()
-  } catch (e) {
-    showError(e)
-  }
-}
 async function confirmCandidate(candidate: Obj) {
   const p = objects.value.find((item) => item.id === candidate.proposalId)
   if (!p) return
@@ -2050,6 +2045,19 @@ async function confirmConcept(resource: Obj) {
     await studioApi(`/entities/${e.id}/appearance`, {
       assetId: resource.assetId,
       expectedRevision: e.revision,
+      requestId: requestId()
+    })
+    await refresh()
+  } catch (e) {
+    showError(e)
+  }
+}
+async function confirmVoice(resource: Obj) {
+  try {
+    const entity = objectById(resource.entityId)!
+    await studioApi(`/entities/${entity.id}/voice`, {
+      assetId: resource.assetId,
+      expectedRevision: entity.revision,
       requestId: requestId()
     })
     await refresh()
@@ -2311,7 +2319,7 @@ function projectGraph() {
     n.bgcolor = '#152431'
     n.addInput('', '*')
     n.addOutput('', '*')
-    if (o.assetId) {
+    if (o.assetId && o.type !== 'audio') {
       let image = images.get(o.assetId)
       if (!image) {
         image = new Image()
@@ -2378,10 +2386,13 @@ function projectGraph() {
         ctx.fillStyle = '#8fd1ae'
         ctx.fillText(`◉ ${o.agentActivity}`, 14, 58, 286)
       }
-      if (!o.assetId) {
+      if (!o.assetId || o.type === 'audio') {
         ctx.fillStyle = '#d4e0e6'
         ctx.font = '12px system-ui'
-        const lines: string[] = []
+        const lines: string[] =
+          o.type === 'audio'
+            ? ['♫ 声音样音 · 选择节点可试听', String(o.status || '')]
+            : []
         let line = ''
         for (const character of nodePreview(o)) {
           const next = line + character
@@ -3181,6 +3192,10 @@ nav small {
 .resource-image {
   width: 100%;
   border-radius: 7px;
+}
+.resource-audio {
+  width: 100%;
+  margin: 12px 0;
 }
 .candidate {
   border-top: 1px solid var(--line);

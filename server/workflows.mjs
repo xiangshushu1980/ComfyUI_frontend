@@ -23,16 +23,22 @@ export const definitions = [
   {
     id: 'CreateEntity',
     version: 1,
-    name: '实体形象创建',
+    name: '人物实体制作',
     target: 'entity',
-    operations: ['add_reference', 'generate_concepts']
+    operations: [
+      'add_reference',
+      'generate_concepts',
+      'select_references',
+      'set_voice_design'
+    ]
   },
   {
     id: 'GenerateThreeView',
     version: 1,
-    name: '正式形象三视图',
+    name: '正式形象三视图（旧入口）',
     target: 'entity',
-    operations: ['generate_threeview']
+    operations: ['generate_threeview'],
+    deprecated: true
   }
 ].map((d) => ({ owner: 'Sean', ...d }))
 const terminal = new Set(['succeeded', 'failed', 'cancelled'])
@@ -246,7 +252,12 @@ export class Workflows {
         name: o.name,
         sourceId: o.sourceId,
         anchorIds: o.anchorIds,
-        role: o.role
+        role: o.role,
+        type: o.type,
+        assetId: o.assetId,
+        status: o.status,
+        description: o.description,
+        text: typeof o.text === 'string' ? o.text.slice(0, 2000) : undefined
       })),
       grants: all
         .filter((o) => o.kind === 'workflow_grant' && o.sessionId === id)
@@ -255,9 +266,12 @@ export class Workflows {
           status: g.status,
           conceptRemaining: g.conceptRemaining,
           threeViewRemaining: g.threeViewRemaining,
+          voiceRemaining: g.voiceRemaining || 0,
           expiresAt: g.expiresAt
         })),
+      selectedReferenceIds: session.selectedReferenceIds || [],
       confirmedAppearance: target?.appearanceAssetId || null,
+      confirmedVoice: target?.voiceAssetId || null,
       definitions: definitions.filter((d) => d.id === session.workflowId)
     }
   }
@@ -652,6 +666,33 @@ export class Workflows {
       'threeview-only scope'
     )
     const entity = this.store.get(s.targetId)
+    const existing = this.store
+      .list(s.projectId, 'workflow_grant')
+      .findLast(
+        (g) =>
+          g.sessionId === s.id &&
+          g.status === 'authorized' &&
+          g.expiresAt > Date.now() &&
+          g.entityRevision === entity.revision &&
+          (g.conceptRemaining > 0 ||
+            g.threeViewRemaining > 0 ||
+            g.voiceRemaining > 0)
+      )
+    if (existing) {
+      const hasVoiceRun = this.store
+        .list(s.projectId, 'workflow_run')
+        .some((run) => run.sessionId === s.id && run.stage === 'voice')
+      if (
+        body.voice === true &&
+        entity.type === 'character' &&
+        existing.voiceRemaining === undefined &&
+        !hasVoiceRun
+      )
+        return this.store.update(existing.id, existing.revision, {
+          voiceRemaining: 1
+        })
+      return existing
+    }
     for (const grant of this.store
       .list(s.projectId, 'workflow_grant')
       .filter((g) => g.sessionId === s.id && g.status === 'authorized'))
@@ -662,6 +703,8 @@ export class Workflows {
       entityRevision: entity.revision,
       conceptRemaining: body.conceptCount,
       threeViewRemaining: body.threeView === true ? 1 : 0,
+      voiceRemaining:
+        body.voice === true && entity.type === 'character' ? 1 : 0,
       status: 'authorized',
       expiresAt: Date.now() + 24 * 3600000,
       actor: entity.origin === 'test_fixture' ? 'automated_test' : 'human'
@@ -669,7 +712,12 @@ export class Workflows {
   }
   grant(sessionId, stage) {
     const s = this.session(sessionId),
-      field = stage === 'concept' ? 'conceptRemaining' : 'threeViewRemaining'
+      field =
+        stage === 'concept'
+          ? 'conceptRemaining'
+          : stage === 'threeview'
+            ? 'threeViewRemaining'
+            : 'voiceRemaining'
     const grant = this.store
       .list(s.projectId, 'workflow_grant')
       .findLast(
@@ -706,16 +754,23 @@ export class Workflows {
     const resources = this.store
       .list(s.projectId, 'resource')
       .filter((r) => r.entityId === entity.id && r.role === 'reference')
+    const allowedReferenceIds = new Set(
+      resources
+        .filter((r) => r.type === 'image' && r.assetId)
+        .map((r) => r.assetId)
+    )
     const assets =
       stage === 'threeview'
         ? [entity.appearanceAssetId]
         : body.referenceIds === undefined
-          ? resources.filter((r) => r.assetId).map((r) => r.assetId)
+          ? s.selectedReferenceIds || []
           : body.referenceIds
     requireThat(
       Array.isArray(assets) &&
         assets.length <= 16 &&
-        (stage !== 'threeview' || assets[0]),
+        (stage !== 'threeview' || assets[0]) &&
+        (stage !== 'concept' ||
+          assets.every((id) => allowedReferenceIds.has(id))),
       'confirmed appearance needed for threeview'
     )
     const references = assets.map((id) => {
@@ -744,7 +799,12 @@ export class Workflows {
             .join('\n')}`
     const inputs = [ref(entity), ...assets.map((id) => ref(this.store.get(id)))]
     const business = this.store.create(s.projectId, 'workflow_run', {
-      name: stage === 'concept' ? '概念图候选' : '正式形象三视图',
+      name:
+        stage === 'concept'
+          ? '概念图候选'
+          : stage === 'threeview'
+            ? '正式形象三视图'
+            : '人物声音样音',
       workflowId: stage === 'concept' ? 'CreateEntity' : 'GenerateThreeView',
       definitionVersion: 1,
       sessionId,
@@ -816,6 +876,242 @@ export class Workflows {
     ).unref()
     return this.store.get(business.id)
   }
+  selectReferences(sessionId, body) {
+    const s = this.session(sessionId)
+    requireThat(s.workflowId === 'CreateEntity', 'use entity creation Workflow')
+    requireThat(Array.isArray(body.referenceIds), 'referenceIds required')
+    const allowed = new Set(
+      this.store
+        .list(s.projectId, 'resource')
+        .filter(
+          (r) =>
+            r.entityId === s.targetId &&
+            r.role === 'reference' &&
+            r.type === 'image' &&
+            r.assetId
+        )
+        .map((r) => r.assetId)
+    )
+    requireThat(
+      body.referenceIds.length <= 16 &&
+        body.referenceIds.every((id) => allowed.has(id)),
+      'only this character’s reference images can be selected'
+    )
+    const updated = this.store.update(s.id, s.revision, {
+      selectedReferenceIds: [...new Set(body.referenceIds)]
+    })
+    return {
+      session: updated,
+      selectedReferenceIds: updated.selectedReferenceIds
+    }
+  }
+  generateVoiceSample(sessionId, body) {
+    const s = this.session(sessionId)
+    requireThat(
+      s.workflowId === 'CreateEntity',
+      'use entity creation Workflow',
+      403
+    )
+    const entity = this.store.sameProject(s.targetId, s.projectId, 'entity')
+    requireThat(
+      entity.type === 'character',
+      'voice samples are only for characters',
+      403
+    )
+    requireThat(
+      entity.appearanceAssetId,
+      'confirm the formal appearance first',
+      409
+    )
+    requireThat(
+      this.store
+        .list(s.projectId, 'workflow_run')
+        .some(
+          (run) =>
+            run.sessionId === s.id &&
+            run.targetId === entity.id &&
+            run.stage === 'threeview' &&
+            run.status === 'succeeded'
+        ),
+      'complete the authorized three-view step before voice design',
+      409
+    )
+    const grant = this.grant(sessionId, 'voice')
+    const voiceDescription = String(body.voiceDescription || '').trim()
+    const sampleText = String(body.sampleText || '').trim()
+    requireThat(
+      voiceDescription.length > 0 && voiceDescription.length <= 1200,
+      'voiceDescription required (max 1200 chars)'
+    )
+    requireThat(
+      sampleText.length > 0 && sampleText.length <= 1200,
+      'sampleText required (max 1200 chars)'
+    )
+    const input = {
+      voiceDescription,
+      sampleText,
+      language: body.language === 'en' ? 'en' : 'zh',
+      seed: Number.isInteger(body.seed) ? body.seed : 42,
+      cfgScale: Number.isFinite(body.cfgScale) ? body.cfgScale : 1.5,
+      entity: { id: entity.id, revision: entity.revision, name: entity.name }
+    }
+    const business = this.store.create(s.projectId, 'workflow_run', {
+      name: '人物声音样音',
+      workflowId: 'CreateEntity',
+      definitionVersion: 1,
+      sessionId,
+      targetId: entity.id,
+      stage: 'voice',
+      grantId: grant.id,
+      status: 'running',
+      inputs: [ref(entity)],
+      parameters: input,
+      outputs: [],
+      childRunIds: [],
+      executionRelations: [],
+      createdAt: new Date().toISOString()
+    })
+    const child = this.execution.prepareBusinessRun({
+      projectId: s.projectId,
+      targetEntityId: entity.id,
+      workflowRunId: business.id,
+      sessionId,
+      input,
+      stage: 'voice'
+    })
+    this.store.update(business.id, business.revision, {
+      childRunIds: [child.id],
+      executionRelations: [
+        { scope: 'execution', fromId: entity.id, toId: child.id, role: 'input' }
+      ]
+    })
+    this.store.update(grant.id, grant.revision, {
+      voiceRemaining: grant.voiceRemaining - 1
+    })
+    this.store.update(s.id, s.revision, { status: 'working' })
+    setTimeout(() => {
+      if (!this.stopped && this.store.get(child.id))
+        void this.execution.execute(child.id)
+    }, 0).unref()
+    return this.store.get(business.id)
+  }
+  setVoiceDesign(sessionId, body) {
+    const s = this.session(sessionId)
+    requireThat(
+      s.workflowId === 'CreateEntity',
+      'use entity creation Workflow',
+      403
+    )
+    const entity = this.store.sameProject(s.targetId, s.projectId, 'entity')
+    requireThat(
+      entity.type === 'character',
+      'voice design is only for characters',
+      403
+    )
+    const design = {
+      voiceDescription: String(body.voiceDescription || '').trim(),
+      sampleText: String(body.sampleText || '').trim(),
+      language: body.language === 'en' ? 'en' : 'zh'
+    }
+    requireThat(
+      design.voiceDescription.length > 0 &&
+        design.voiceDescription.length <= 1200,
+      'voiceDescription required (max 1200 chars)'
+    )
+    requireThat(
+      design.sampleText.length > 0 && design.sampleText.length <= 1200,
+      'sampleText required (max 1200 chars)'
+    )
+    this.store.update(s.id, s.revision, { voiceDesign: design })
+    const voiceRun = this.maybeStartVoiceSample(s.id)
+    return { session: this.session(s.id), voiceRun }
+  }
+  maybeStartVoiceSample(sessionId) {
+    const s = this.session(sessionId)
+    if (s.workflowId !== 'CreateEntity' || !s.voiceDesign || s.voiceRunId)
+      return null
+    const entity = this.store.get(s.targetId)
+    const ready = this.store
+      .list(s.projectId, 'workflow_run')
+      .some(
+        (run) =>
+          run.sessionId === s.id &&
+          run.targetId === entity.id &&
+          run.stage === 'threeview' &&
+          run.status === 'succeeded'
+      )
+    if (!ready || !entity.appearanceAssetId) return null
+    const grant = this.store
+      .list(s.projectId, 'workflow_grant')
+      .findLast(
+        (item) =>
+          item.sessionId === s.id &&
+          item.status === 'authorized' &&
+          item.expiresAt > Date.now() &&
+          item.voiceRemaining > 0 &&
+          item.entityRevision === entity.revision
+      )
+    if (!grant) return null
+    const voiceRun = this.generateVoiceSample(s.id, s.voiceDesign)
+    const current = this.session(s.id)
+    this.store.update(current.id, current.revision, { voiceRunId: voiceRun.id })
+    return voiceRun
+  }
+  confirmVoice(entityId, body) {
+    const entity = this.store.get(entityId)
+    requireThat(
+      entity.kind === 'entity' && entity.type === 'character',
+      'voice is only available for characters',
+      403
+    )
+    const asset = this.store.sameProject(
+      body.assetId,
+      entity.projectId,
+      'asset'
+    )
+    const run = this.store.sameProject(asset.runId, entity.projectId, 'run')
+    requireThat(
+      asset.mime === 'audio/wav' &&
+        run.stage === 'voice' &&
+        run.status === 'succeeded' &&
+        run.targetEntityId === entity.id,
+      'only a successful voice sample for this character can be selected'
+    )
+    requireThat(
+      entity.revision === body.expectedRevision,
+      'voice selection conflict',
+      409
+    )
+    const selection = this.store.create(entity.projectId, 'voice_selection', {
+      entityId,
+      assetId: asset.id,
+      actor: entity.origin === 'test_fixture' ? 'automated_test' : 'human',
+      inputHash: run.inputHash,
+      workflowRunId: run.workflowRunId,
+      createdAt: new Date().toISOString()
+    })
+    this.store.update(entity.id, entity.revision, {
+      voiceAssetId: asset.id,
+      voiceSelectionId: selection.id
+    })
+    for (const resource of this.store
+      .list(entity.projectId, 'resource')
+      .filter((r) => r.assetId === asset.id && r.entityId === entityId))
+      this.store.update(resource.id, resource.revision, {
+        status: 'confirmed',
+        role: 'voice_current'
+      })
+    const parent = this.store.get(run.workflowRunId)
+    this.store.update(parent.id, parent.revision, {
+      status: 'succeeded',
+      selectedAssetId: asset.id
+    })
+    if (run.sessionId) {
+      const session = this.session(run.sessionId)
+      this.store.update(session.id, session.revision, { status: 'ready' })
+    }
+    return selection
+  }
   confirmAppearance(entityId, body) {
     const entity = this.store.get(entityId),
       asset = this.store.sameProject(body.assetId, entity.projectId, 'asset'),
@@ -823,7 +1119,8 @@ export class Workflows {
     requireThat(
       run.targetEntityId === entityId &&
         run.status === 'succeeded' &&
-        run.stage !== 'threeview',
+        run.stage === 'concept' &&
+        asset.mime === 'image/png',
       'only successful concept target can be confirmed'
     )
     requireThat(
@@ -902,7 +1199,7 @@ export class Workflows {
         : children.every((c) => terminal.has(c.status))
           ? children.some((c) => c.status !== 'succeeded')
             ? 'failed'
-            : run.stage === 'concept'
+            : ['concept', 'voice'].includes(run.stage)
               ? 'waiting_confirmation'
               : 'succeeded'
           : 'running'
@@ -917,10 +1214,20 @@ export class Workflows {
             continue
           const asset = this.store.get(id)
           const resource = this.store.create(run.projectId, 'resource', {
-            name: run.stage === 'threeview' ? '正侧背三视图' : '概念图候选',
+            name:
+              run.stage === 'voice'
+                ? '人物声音样音'
+                : run.stage === 'threeview'
+                  ? '正侧背三视图'
+                  : '概念图候选',
             entityId: run.targetId,
-            type: 'image',
-            role: run.stage === 'threeview' ? 'threeview' : 'concept',
+            type: run.stage === 'voice' ? 'audio' : 'image',
+            role:
+              run.stage === 'voice'
+                ? 'voice_candidate'
+                : run.stage === 'threeview'
+                  ? 'threeview'
+                  : 'concept',
             assetId: id,
             workflowRunId: run.id,
             sourceAssetIds: asset.sourceAssetIds,
@@ -958,6 +1265,8 @@ export class Workflows {
                   : status
         })
       })
+      if (run.stage === 'threeview' && status === 'succeeded' && run.sessionId)
+        this.maybeStartVoiceSample(run.sessionId)
     }
   }
   operate(sessionId, operation, body, actor = 'agent') {
@@ -981,6 +1290,10 @@ export class Workflows {
         return this.generate(sessionId, body)
       if (operation === 'generate_threeview')
         return this.generate(sessionId, body, 'threeview')
+      if (operation === 'select_references')
+        return this.selectReferences(sessionId, body)
+      if (operation === 'set_voice_design')
+        return this.setVoiceDesign(sessionId, body)
       requireThat(false, 'unknown operation')
     })
   }

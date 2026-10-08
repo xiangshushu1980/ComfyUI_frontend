@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { uuid, hash, requireThat } from './store.mjs'
 import { compileQwen, verifyWorkflow, nativeSnapshot } from './qwen.mjs'
+import { buildVoiceGraph } from './voice.mjs'
 const exec = promisify(execFile),
   sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const terminal = new Set([
@@ -218,10 +219,20 @@ export class Execution {
     input,
     stage
   }) {
-    const compiled = compileQwen(input)
-    const workflow = nativeSnapshot(compiled.graph)
+    const compiled =
+      stage === 'voice' ? buildVoiceGraph(input, uuid()) : compileQwen(input)
+    const graph = compiled.graph
+    const workflow =
+      stage === 'voice'
+        ? { owner: 'Sean', representation: 'fixed_api_graph', graph }
+        : nativeSnapshot(graph)
     return this.store.create(projectId, 'run', {
-      name: stage === 'threeview' ? 'Qwen · 三视图' : 'Qwen · 概念图',
+      name:
+        stage === 'voice'
+          ? 'Breeze TTS · 人物样音'
+          : stage === 'threeview'
+            ? 'Qwen · 三视图'
+            : 'Qwen · 概念图',
       targetEntityId,
       workflowRunId,
       sessionId,
@@ -230,9 +241,9 @@ export class Execution {
       inputHash: hash(input),
       graph: compiled.graph,
       workflow,
-      apiHash: compiled.apiHash,
+      apiHash: compiled.apiHash || hash(graph),
       uiHash: hash(workflow),
-      templateId: compiled.templateId,
+      templateId: compiled.templateId || 'breeze-tts-2-character-sample-v1',
       status: 'prepared',
       executionKey: uuid(),
       clientId: 'sean-entity-' + uuid(),
@@ -243,6 +254,7 @@ export class Execution {
     })
   }
   async uploadReferences(run) {
+    if (run.stage === 'voice') return
     for (const ref of run.inputSnapshot.input.references) {
       const a = this.store.sameProject(ref.assetId, run.projectId, 'asset'),
         bytes = await readFile(join(this.dataDir, a.path))
@@ -295,13 +307,14 @@ export class Execution {
   }
   async collect(run, entry) {
     this.update(run.id, { status: 'collecting' })
+    const mediaType = run.stage === 'voice' ? 'audio' : 'image'
     const files = Object.entries(entry.outputs || {}).flatMap(
       ([nodeId, output]) =>
-        (output.images || [])
+        (output[mediaType] || [])
           .filter((f) => f.type === 'output')
           .map((f) => ({ ...f, nodeId }))
     )
-    requireThat(files.length > 0, 'completed without image output')
+    requireThat(files.length > 0, `completed without ${mediaType} output`)
     const staged = []
     await mkdir(join(this.dataDir, 'media'), { recursive: true })
     for (const f of files) {
@@ -313,14 +326,23 @@ export class Execution {
       const response = await fetch(this.comfyUrl + '/view?' + q)
       requireThat(response.ok, 'output collection failed')
       const bytes = Buffer.from(await response.arrayBuffer())
-      requireThat(
-        bytes
-          .subarray(0, 8)
-          .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
-        'output is not PNG'
-      )
+      if (mediaType === 'audio')
+        requireThat(
+          bytes.length <= 32 * 1024 * 1024 &&
+            bytes.subarray(0, 4).toString('ascii') === 'RIFF' &&
+            bytes.subarray(8, 12).toString('ascii') === 'WAVE',
+          'output is not a supported WAV file'
+        )
+      else
+        requireThat(
+          bytes
+            .subarray(0, 8)
+            .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+          'output is not PNG'
+        )
       const digest = hash(bytes),
-        relative = 'media/' + digest + '.png',
+        extension = mediaType === 'audio' ? '.wav' : '.png',
+        relative = 'media/' + digest + extension,
         temporary = join(this.dataDir, 'media', uuid() + '.tmp')
       await writeFile(temporary, bytes)
       await rename(temporary, join(this.dataDir, relative))
@@ -328,8 +350,9 @@ export class Execution {
         file: f,
         hash: digest,
         path: relative,
-        width: bytes.readUInt32BE(16),
-        height: bytes.readUInt32BE(20)
+        width: mediaType === 'image' ? bytes.readUInt32BE(16) : null,
+        height: mediaType === 'image' ? bytes.readUInt32BE(20) : null,
+        mime: mediaType === 'audio' ? 'audio/wav' : 'image/png'
       })
     }
     this.store.transaction(() => {
@@ -341,16 +364,16 @@ export class Execution {
         ? existing
         : staged.map((s) =>
             this.store.create(run.projectId, 'asset', {
-              name: 'Qwen 候选',
+              name: run.stage === 'voice' ? '人物声音样音' : 'Qwen 候选',
               runId: run.id,
               nodeId: s.file.nodeId,
               hash: s.hash,
               path: s.path,
-              mime: 'image/png',
+              mime: s.mime,
               width: s.width,
               height: s.height,
               inputId: run.inputId,
-              sourceAssetIds: run.inputSnapshot.input.references.map(
+              sourceAssetIds: (run.inputSnapshot.input.references || []).map(
                 (r) => r.assetId
               ),
               inputHash: run.inputHash
@@ -476,16 +499,19 @@ export class Execution {
         await this.uploadReferences(run)
         const graph = structuredClone(run.graph),
           workflow = structuredClone(run.workflow),
-          prefix = `sean_entity_canvas/runs/${id}/concept`
-        graph['9'].inputs.filename_prefix = prefix
-        const save = workflow.nodes.find((n) => String(n.id) === '9')
-        requireThat(
-          save?.widgets_values?.length,
-          'SaveImage UI binding missing'
-        )
-        save.widgets_values[0] = prefix
-        if (save.widgets_values_named)
-          save.widgets_values_named.filename_prefix = prefix
+          saveNode = run.stage === 'voice' ? '12' : '9',
+          prefix = `sean_entity_canvas/runs/${id}/${run.stage === 'voice' ? 'voice' : 'concept'}`
+        graph[saveNode].inputs.filename_prefix = prefix
+        if (run.stage !== 'voice') {
+          const save = workflow.nodes.find((n) => String(n.id) === saveNode)
+          requireThat(
+            save?.widgets_values?.length,
+            'SaveImage UI binding missing'
+          )
+          save.widgets_values[0] = prefix
+          if (save.widgets_values_named)
+            save.widgets_values_named.filename_prefix = prefix
+        } else workflow.graph = graph
         run = this.update(id, {
           status: 'submitting',
           graph,

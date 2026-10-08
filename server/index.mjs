@@ -450,16 +450,35 @@ export function createStudioServer({
           )
         }
         if (
+          (m = path.match(/^\/entities\/([^/]+)\/voice$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          return send(
+            store.write(path, b, () => workflows.confirmVoice(m[1], b))
+          )
+        }
+        if (
           (m = path.match(/^\/assets\/([^/]+)\/(content|thumbnail)$/)) &&
           req.method === 'GET'
         ) {
           const a = store.get(m[1])
-          requireThat(
-            a.kind === 'asset' && /^media\/[a-f0-9]{64}\.png$/.test(a.path),
-            'invalid media'
-          )
+          requireThat(a.kind === 'asset', 'asset required')
+          if (a.mime === 'image/png')
+            requireThat(
+              /^media\/[a-f0-9]{64}\.png$/.test(a.path),
+              'invalid media'
+            )
+          else if (a.mime === 'audio/wav')
+            requireThat(
+              m[2] === 'content' && /^media\/[a-f0-9]{64}\.wav$/.test(a.path),
+              'invalid audio media'
+            )
+          else requireThat(false, 'unsupported media type')
+          if (m[2] === 'thumbnail')
+            requireThat(a.mime === 'image/png', 'thumbnail requires an image')
           res.writeHead(200, {
-            'content-type': 'image/png',
+            'content-type': a.mime,
             'cache-control': 'private,max-age=86400'
           })
           res.end(

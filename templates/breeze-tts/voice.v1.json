@@ -1,0 +1,28 @@
+{
+  "owner": "Sean",
+  "id": "breeze-tts-2-character-sample-v1",
+  "version": 1,
+  "model": {
+    "class_type": "BreezeTTS2LoadModel",
+    "inputs": {
+      "model": "bf16 (best quality)",
+      "dtype": "auto",
+      "device": "cuda",
+      "attention": "sdpa",
+      "decode_mode": "cuda_graphs",
+      "download_if_missing": false
+    }
+  },
+  "controls": {
+    "pause_between_speakers": 0.3,
+    "max_new_tokens": 384,
+    "temperature": 0.9,
+    "top_k": 50,
+    "top_p": 1,
+    "repetition_penalty": 1.1,
+    "depth_temperature": 0.9,
+    "depth_top_k": 50,
+    "depth_top_p": 1
+  },
+  "sampleText": "你好，很高兴见到你。今天我们一起出发，慢慢认识这个世界。"
+}

@@ -673,7 +673,7 @@ export class PiBridge {
         tools: {
           workflow_operation: {
             operation:
-              'structure_novel | refine_chapters | propose_entities | add_reference | generate_concepts | generate_threeview',
+              'structure_novel | refine_chapters | propose_entities | add_reference | select_references | generate_concepts | generate_threeview | set_voice_design',
             parameters: {
               requestId: 'unique key',
               chapterId: 'propose_entities: chapter UUID',
@@ -688,7 +688,14 @@ export class PiBridge {
               seed: 'optional integer, default 42',
               steps: 'optional integer 1..50, default 25',
               referenceIds:
-                'optional ordered image asset UUIDs; omitted uses entity reference resources',
+                'optional ordered image asset UUIDs; use select_references to persist the chosen subset',
+              voiceDescription:
+                'set_voice_design: text-designed character voice direction; required, max 1200 chars',
+              sampleText:
+                'set_voice_design: short sentence spoken in the sample; required, max 1200 chars',
+              language: 'voice design: zh (default) or en',
+              selectReferences:
+                'select_references: referenceIds is the explicit ordered subset of this character’s image references',
               sourceId: 'structure_novel: existing source UUID',
               sourceRevision:
                 'refine_chapters: revision returned by read_source',

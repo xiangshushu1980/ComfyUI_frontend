@@ -1173,13 +1173,32 @@ function projectGraph() {
     n.onDrawForeground = (ctx) => {
       ctx.save()
       if (invalidGlowId.value === o.id) {
-        ctx.shadowColor = '#72d9ff'
+        ctx.shadowColor = '#ff5b50'
         ctx.shadowBlur = 22
-        ctx.strokeStyle = '#9be7ff'
+        ctx.strokeStyle = '#ff9a75'
         ctx.lineWidth = 3 / canvas.ds.scale
         ctx.strokeRect(2, 2, n.size[0] - 4, n.size[1] - 4)
       }
       ctx.restore()
+      const drillStatus =
+        focusId.value === o.id
+          ? '当前层'
+          : canDrill(objects.value, o.id, showAllResources.value)
+            ? ''
+            : '末级'
+      if (drillStatus) {
+        ctx.save()
+        ctx.font = '11px system-ui'
+        const badgeWidth = ctx.measureText(drillStatus).width + 14
+        const badgeX = n.size[0] - badgeWidth - 8
+        ctx.fillStyle = drillStatus === '当前层' ? '#43535e' : '#364752'
+        ctx.beginPath()
+        ctx.roundRect(badgeX, 5, badgeWidth, 20, 5)
+        ctx.fill()
+        ctx.fillStyle = '#e0e7eb'
+        ctx.fillText(drillStatus, badgeX + 7, 19)
+        ctx.restore()
+      }
       ctx.save()
       ctx.beginPath()
       ctx.rect(10, 24, 300, n.size[1] - 24)

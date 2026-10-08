@@ -148,22 +148,31 @@
       <nav class="canvas-navigation" aria-label="画布导航">
         <div class="navigation-location">
           <div class="breadcrumbs" aria-label="当前位置">
-            <span :aria-current="!navigationPath.length ? 'page' : undefined">{{
-              project?.name || '工程'
-            }}</span>
+            <button
+              type="button"
+              :disabled="!navigationPath.length"
+              :aria-current="!navigationPath.length ? 'page' : undefined"
+              @click="navigatePath([])"
+            >
+              {{ project?.name || '工程' }}
+            </button>
             <template v-for="(id, index) in navigationPath" :key="id">
               <span aria-hidden="true">/</span>
-              <span
+              <button
+                type="button"
+                :disabled="index === navigationPath.length - 1"
                 :aria-current="
                   index === navigationPath.length - 1 ? 'page' : undefined
                 "
                 :title="
                   objectById(id)?.name || kindName(objectById(id)?.kind || '')
                 "
-                >{{
-                  objectById(id)?.name || kindName(objectById(id)?.kind || '')
-                }}</span
+                @click="navigatePath(navigationPath.slice(0, index + 1))"
               >
+                {{
+                  objectById(id)?.name || kindName(objectById(id)?.kind || '')
+                }}
+              </button>
             </template>
           </div>
         </div>
@@ -171,6 +180,15 @@
       </nav>
       <div ref="canvasHost" class="canvas-host">
         <canvas ref="canvasElement" />
+        <div
+          v-if="hoverTooltip"
+          class="canvas-tooltip"
+          :style="{ left: `${hoverTooltip.x}px`, top: `${hoverTooltip.y}px` }"
+          role="tooltip"
+        >
+          <strong>{{ hoverTooltip.name }}</strong>
+          <span>{{ hoverTooltip.help }}</span>
+        </div>
         <div
           v-if="projectId && objects.length && !visibleObjects.length"
           class="empty scope-empty"
@@ -439,6 +457,13 @@ const canvasHost = ref<HTMLElement>(),
   native = ref<InstanceType<typeof NativeWorkflow>>(),
   executionSnapshot = ref<Obj | null>(null)
 const images = new Map<string, HTMLImageElement>()
+const hoverTooltip = ref<{
+  x: number
+  y: number
+  name: string
+  help: string
+} | null>(null)
+const invalidGlowId = ref('')
 const focusId = computed(() => navigationPath.value.at(-1) || '')
 const currentObject = computed(() => objectById(focusId.value))
 const visibleObjects = computed(() =>
@@ -499,6 +524,7 @@ let graph: LGraph,
   poll: ReturnType<typeof setInterval> | undefined,
   viewTimer: ReturnType<typeof setTimeout> | undefined,
   inspectTimer: ReturnType<typeof setTimeout> | undefined,
+  invalidGlowTimer: ReturnType<typeof setTimeout> | undefined,
   refreshing = false
 let pointerStart: { x: number; y: number } | undefined
 let pointerDragged = false
@@ -642,6 +668,7 @@ function drillInto(o: Obj, contextual = true) {
     focusId.value === o.id ||
     !canDrill(objects.value, o.id, showAllResources.value)
   ) {
+    flashInvalidAction(o.id)
     select(o)
     return
   }
@@ -653,6 +680,31 @@ function drillInto(o: Obj, contextual = true) {
         ? [...navigationPath.value, o.id]
         : objectPath(o.id, objectHierarchy(objects.value))
   navigatePath(path)
+}
+function flashInvalidAction(id: string) {
+  clearTimeout(invalidGlowTimer)
+  invalidGlowId.value = id
+  canvas?.setDirty(true, true)
+  invalidGlowTimer = setTimeout(() => {
+    invalidGlowId.value = ''
+    canvas?.setDirty(true, true)
+  }, 700)
+}
+function nodePreview(o: Obj) {
+  const source = o.sourceId && objectById(o.sourceId)
+  const chapterText =
+    o.kind === 'chapter' && source?.text
+      ? source.text.slice(o.start || 0, o.end || undefined)
+      : ''
+  const raw =
+    o.preview ||
+    o.description ||
+    o.brief ||
+    chapterText ||
+    o.text ||
+    o.status ||
+    ''
+  return String(raw).replace(/\s+/g, ' ').trim().slice(0, 170)
 }
 function selectId(id: string) {
   const o = objectById(id)
@@ -1118,6 +1170,15 @@ function projectGraph() {
     }
     n.onDrawForeground = (ctx) => {
       ctx.save()
+      if (invalidGlowId.value === o.id) {
+        ctx.shadowColor = '#72d9ff'
+        ctx.shadowBlur = 22
+        ctx.strokeStyle = '#9be7ff'
+        ctx.lineWidth = 3 / canvas.ds.scale
+        ctx.strokeRect(2, 2, n.size[0] - 4, n.size[1] - 4)
+      }
+      ctx.restore()
+      ctx.save()
       ctx.beginPath()
       ctx.rect(10, 24, 300, n.size[1] - 24)
       ctx.clip()
@@ -1130,18 +1191,22 @@ function projectGraph() {
       )
       if (!o.assetId) {
         ctx.fillStyle = '#d4e0e6'
-        ctx.fillText(
-          (
-            o.description ||
-            o.brief ||
-            o.status ||
-            (['source', 'chapter', 'scene', 'entity'].includes(o.kind)
-              ? '单击查看 · 有下级可双击'
-              : '单击查看详情')
-          ).slice(0, 24),
-          14,
-          76
-        )
+        ctx.font = '12px system-ui'
+        const lines: string[] = []
+        let line = ''
+        for (const character of nodePreview(o)) {
+          const next = line + character
+          if (line && ctx.measureText(next).width > 286) {
+            lines.push(line)
+            line = character.trimStart()
+          } else line = next
+        }
+        if (line) lines.push(line)
+        lines
+          .slice(0, 4)
+          .forEach((text, index) =>
+            ctx.fillText(text, 14, 72 + index * 17, 286)
+          )
       }
       ctx.restore()
     }
@@ -1220,6 +1285,8 @@ onMounted(async () => {
   canvas.onDrawBackground = (ctx, area) => {
     const step = canvas.ds.scale < 0.4 ? 110 : 22
     ctx.fillStyle = '#2c3d4d'
+    // LiteGraph applies DragAndScale before this callback. Grid positions,
+    // visible_area and node.pos therefore share graph-space origin (0, 0).
     for (
       let x = Math.floor(area[0] / step) * step;
       x < area[0] + area[2];
@@ -1231,6 +1298,16 @@ onMounted(async () => {
         y += step
       )
         ctx.fillRect(x, y, 1 / canvas.ds.scale, 1 / canvas.ds.scale)
+    ctx.save()
+    ctx.strokeStyle = '#66809766'
+    ctx.lineWidth = 1 / canvas.ds.scale
+    ctx.beginPath()
+    ctx.moveTo(0, area[1])
+    ctx.lineTo(0, area[1] + area[3])
+    ctx.moveTo(area[0], 0)
+    ctx.lineTo(area[0] + area[2], 0)
+    ctx.stroke()
+    ctx.restore()
   }
   canvas.allow_dragnodes = false
   canvas.allow_searchbox = false
@@ -1271,6 +1348,25 @@ onMounted(async () => {
       ) > 6
     )
       pointerDragged = true
+    const [x, y] = canvas.convertEventToCanvasOffset(event)
+    const node = hitCanvasNode(graph.nodes, x, y)
+    const object = node && objectById(String(node.id))
+    if (object) {
+      const rect = canvasHost.value!.getBoundingClientRect()
+      hoverTooltip.value = {
+        x: event.clientX - rect.left + 14,
+        y: event.clientY - rect.top + 14,
+        name: object.name || kindName(object.kind),
+        help:
+          object.id !== focusId.value &&
+          canDrill(objects.value, object.id, showAllResources.value)
+            ? '单击查看详情 · 双击进入下级'
+            : '单击查看详情 · 当前对象没有可进入的下级'
+      }
+    } else hoverTooltip.value = null
+  })
+  canvasElement.value!.addEventListener('pointerleave', () => {
+    hoverTooltip.value = null
   })
   canvasElement.value!.addEventListener('click', (event) => {
     if (pointerDragged || event.button !== 0) return
@@ -1312,6 +1408,7 @@ onBeforeUnmount(() => {
   events?.close()
   clearInterval(poll)
   clearTimeout(inspectTimer)
+  clearTimeout(invalidGlowTimer)
   clearTimeout(viewTimer)
   resizeObserver?.disconnect()
   canvas?.stopRendering()
@@ -1482,9 +1579,30 @@ nav small {
   white-space: nowrap;
   padding: 4px 7px;
 }
+.breadcrumbs > button {
+  flex-shrink: 0;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.breadcrumbs > button:hover:not([aria-current='page']) {
+  color: var(--ink);
+  background: #203542;
+}
 .breadcrumbs [aria-current='page'] {
   color: #e2eaf0;
   background: #294657;
+  cursor: default;
+}
+.breadcrumbs > button:disabled {
+  cursor: default;
 }
 .scope-empty {
   max-width: 50%;
@@ -1500,6 +1618,24 @@ nav small {
   display: block;
   position: absolute;
   inset: 0;
+}
+.canvas-tooltip {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  gap: 3px;
+  max-width: 280px;
+  padding: 8px 10px;
+  border: 1px solid #456274;
+  border-radius: 6px;
+  color: var(--ink);
+  background: #14232fee;
+  box-shadow: 0 6px 20px #0008;
+  font-size: 11px;
+  pointer-events: none;
+}
+.canvas-tooltip span {
+  color: #a8bbc8;
 }
 .empty {
   position: absolute;

@@ -184,11 +184,20 @@
           </template>
           <template v-else-if="contextNode?.kind === 'resource'">
             <button
-              v-if="contextNode.role === 'concept'"
+              v-if="
+                ['concept', 'appearance_candidate'].includes(contextNode.role)
+              "
               role="menuitem"
               @click="confirmConcept(contextNode)"
             >
               确认为正式形象
+            </button>
+            <button
+              v-if="contextNode.role === 'threeview'"
+              role="menuitem"
+              @click="confirmThreeView(contextNode)"
+            >
+              确认三视图效果
             </button>
             <button
               role="menuitem"
@@ -525,11 +534,17 @@
           <pre v-else>{{ selected.text }}</pre>
           <p>{{ selected.role }} · {{ selected.status }}</p>
           <button
-            v-if="selected.role === 'concept'"
+            v-if="['concept', 'appearance_candidate'].includes(selected.role)"
             class="primary"
             @click="confirmConcept(selected)"
           >
-            确认正式形象 · 继续已授权三视图</button
+            确认正式形象 · 准备三视图配置</button
+          ><button
+            v-if="selected.role === 'threeview'"
+            class="primary"
+            @click="confirmThreeView(selected)"
+          >
+            确认三视图效果</button
           ><button
             v-if="selected.role === 'voice_candidate'"
             class="primary"
@@ -548,6 +563,49 @@
         </template>
         <template v-if="selected.kind === 'workflow_run'"
           ><p>{{ statusName(effectiveRunStatus(selected)) }}</p>
+          <div
+            v-if="selected.status === 'awaiting_input_confirmation'"
+            class="run-approval"
+          >
+            <strong>请确认本次生成配置</strong>
+            <p>提示词</p>
+            <pre>{{ selected.parameters?.prompt }}</pre>
+            <p>引用图资产</p>
+            <div class="run-reference-list">
+              <div
+                v-for="id in selected.parameters?.referenceAssetIds || []"
+                :key="id"
+                class="run-reference"
+              >
+                <img
+                  :src="contentUrl(id)"
+                  :alt="
+                    objects.find(
+                      (item) => item.kind === 'resource' && item.assetId === id
+                    )?.name || '引用图'
+                  "
+                />
+                <span>{{
+                  objects.find(
+                    (item) => item.kind === 'resource' && item.assetId === id
+                  )?.name || id
+                }}</span>
+              </div>
+              <span v-if="!selected.parameters?.referenceAssetIds?.length"
+                >无引用图</span
+              >
+            </div>
+            <small
+              >候选数量：{{ selected.parameters?.count }} ·
+              确认后才会提交生成</small
+            >
+            <button class="primary" @click="confirmGeneration(selected)">
+              确认提示词与引用并生成
+            </button>
+            <button v-if="selected.sessionId" @click="openRunSession(selected)">
+              需要调整，打开 Agent 对话
+            </button>
+          </div>
           <button v-if="selected.sessionId" @click="openRunSession(selected)">
             打开对应 PiWeb ↗</button
           ><button
@@ -1114,6 +1172,7 @@ const names: Record<string, string> = {
   creation_unknown: '创建待核对',
   working: '正在工作',
   running: '执行中',
+  awaiting_input_confirmation: '等待确认提示词与引用',
   queued: '排队中',
   prepared: '准备执行',
   waiting_resource: '等待资源',
@@ -1434,7 +1493,7 @@ async function launchContextWorkflow(workflowId: string) {
       const session = await prepareWorkflow(workflowId, contextId)
       await studioApi(`/workflow-sessions/${session.id}/authorize`, {
         confirmed: true,
-        conceptCount: 2,
+        conceptCount: 4,
         threeView: true,
         voice: objectById(entityId!)?.type === 'character',
         requestId: requestId()
@@ -1690,7 +1749,7 @@ async function createWorkflowConversation(workflowId: string) {
       const target = objectById(targetId)
       await studioApi(`/workflow-sessions/${session.id}/authorize`, {
         confirmed: true,
-        conceptCount: 2,
+        conceptCount: 4,
         threeView: true,
         voice: target?.type === 'character',
         requestId: requestId()
@@ -2045,6 +2104,29 @@ async function confirmConcept(resource: Obj) {
     await studioApi(`/entities/${e.id}/appearance`, {
       assetId: resource.assetId,
       expectedRevision: e.revision,
+      requestId: requestId()
+    })
+    await refresh()
+  } catch (e) {
+    showError(e)
+  }
+}
+async function confirmGeneration(run: Obj) {
+  try {
+    await studioApi(`/workflow-runs/${run.id}/confirm-generation`, {
+      confirm: true,
+      requestId: requestId()
+    })
+    await refresh()
+  } catch (e) {
+    showError(e)
+  }
+}
+async function confirmThreeView(resource: Obj) {
+  try {
+    const entity = objectById(resource.entityId)!
+    await studioApi(`/entities/${entity.id}/threeview`, {
+      assetId: resource.assetId,
       requestId: requestId()
     })
     await refresh()
@@ -2482,7 +2564,11 @@ function projectGraph() {
         })
     for (const outputId of run.outputs || []) {
       const candidates = visible.filter(
-        (o) => o.kind === 'proposal_item' && o.proposalId === outputId
+        (o) =>
+          (o.kind === 'proposal_item' && o.proposalId === outputId) ||
+          (o.kind === 'resource' &&
+            o.workflowRunId === run.id &&
+            o.assetId === outputId)
       )
       const targets = candidates.length ? candidates : [byId.get(outputId)]
       for (const target of targets) {
@@ -3188,6 +3274,30 @@ nav small {
 .inspector pre {
   max-height: 270px;
   overflow: auto;
+}
+.run-approval {
+  padding: 12px;
+  border: 1px solid #567b84;
+  border-radius: 8px;
+  background: #19343b;
+}
+.run-reference-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.run-reference {
+  width: 88px;
+  color: #c2d3dc;
+  font-size: 10px;
+}
+.run-reference img {
+  display: block;
+  width: 88px;
+  height: 76px;
+  object-fit: cover;
+  border-radius: 5px;
 }
 .resource-image {
   width: 100%;

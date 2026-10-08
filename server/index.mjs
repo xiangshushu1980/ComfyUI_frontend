@@ -450,6 +450,24 @@ export function createStudioServer({
           )
         }
         if (
+          (m = path.match(/^\/entities\/([^/]+)\/threeview$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          return send(
+            store.write(path, b, () => workflows.confirmThreeView(m[1], b))
+          )
+        }
+        if (
+          (m = path.match(/^\/workflow-runs\/([^/]+)\/confirm-generation$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          return send(
+            store.write(path, b, () => workflows.confirmGeneration(m[1], b))
+          )
+        }
+        if (
           (m = path.match(/^\/entities\/([^/]+)\/voice$/)) &&
           req.method === 'POST'
         ) {

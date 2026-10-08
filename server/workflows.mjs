@@ -28,6 +28,7 @@ export const definitions = [
     operations: [
       'add_reference',
       'generate_concepts',
+      'prepare_appearance_adjustment',
       'select_references',
       'set_voice_design'
     ]
@@ -712,12 +713,11 @@ export class Workflows {
   }
   grant(sessionId, stage) {
     const s = this.session(sessionId),
-      field =
-        stage === 'concept'
-          ? 'conceptRemaining'
-          : stage === 'threeview'
-            ? 'threeViewRemaining'
-            : 'voiceRemaining'
+      field = ['concept', 'appearance'].includes(stage)
+        ? 'conceptRemaining'
+        : stage === 'threeview'
+          ? 'threeViewRemaining'
+          : 'voiceRemaining'
     const grant = this.store
       .list(s.projectId, 'workflow_grant')
       .findLast(
@@ -743,35 +743,54 @@ export class Workflows {
   generate(sessionId, body, stage = 'concept') {
     const s = this.session(sessionId)
     requireThat(
-      stage === 'concept'
-        ? s.workflowId === 'CreateEntity'
-        : ['CreateEntity', 'GenerateThreeView'].includes(s.workflowId),
+      ['concept', 'appearance', 'threeview'].includes(stage) &&
+        (stage === 'threeview'
+          ? ['CreateEntity', 'GenerateThreeView'].includes(s.workflowId)
+          : s.workflowId === 'CreateEntity'),
       'Workflow scope mismatch',
       403
     )
-    const entity = this.store.get(s.targetId),
-      grant = this.grant(sessionId, stage)
+    const entity = this.store.sameProject(s.targetId, s.projectId, 'entity')
+    const grant = this.grant(sessionId, stage)
     const resources = this.store
       .list(s.projectId, 'resource')
-      .filter((r) => r.entityId === entity.id && r.role === 'reference')
+      .filter((r) => r.entityId === entity.id)
     const allowedReferenceIds = new Set(
       resources
-        .filter((r) => r.type === 'image' && r.assetId)
+        .filter(
+          (r) =>
+            [
+              'reference',
+              'concept',
+              'appearance_candidate',
+              'appearance_current'
+            ].includes(r.role) &&
+            r.type === 'image' &&
+            r.assetId
+        )
         .map((r) => r.assetId)
     )
+    if (stage === 'threeview')
+      requireThat(
+        entity.appearanceAssetId,
+        'confirm formal appearance first',
+        409
+      )
     const assets =
       stage === 'threeview'
         ? [entity.appearanceAssetId]
         : body.referenceIds === undefined
-          ? s.selectedReferenceIds || []
+          ? (s.selectedReferenceIds || []).filter((id) =>
+              allowedReferenceIds.has(id)
+            )
           : body.referenceIds
     requireThat(
       Array.isArray(assets) &&
         assets.length <= 16 &&
-        (stage !== 'threeview' || assets[0]) &&
-        (stage !== 'concept' ||
+        (stage !== 'threeview' || assets[0] === entity.appearanceAssetId) &&
+        (stage === 'threeview' ||
           assets.every((id) => allowedReferenceIds.has(id))),
-      'confirmed appearance needed for threeview'
+      'references must belong to this entity; three-view requires its confirmed appearance'
     )
     const references = assets.map((id) => {
       const a = this.store.sameProject(id, s.projectId, 'asset')
@@ -782,56 +801,131 @@ export class Workflows {
       }
     })
     const count =
-      stage === 'threeview' ? 1 : (body.count ?? grant.conceptRemaining)
+      stage === 'threeview'
+        ? 1
+        : (body.count ?? Math.min(2, grant.conceptRemaining))
     requireThat(
       Number.isInteger(count) &&
         count > 0 &&
-        count <= (stage === 'concept' ? grant.conceptRemaining : 1),
+        count <= (stage === 'threeview' ? 1 : grant.conceptRemaining),
       'candidate budget exceeded'
     )
     const prompt =
       stage === 'threeview'
-        ? threeView.prompt
-        : body.prompt ||
-          `${entity.description}\nFull-body concept portrait, one subject. ${resources
-            .filter((r) => r.type === 'text')
-            .map((r) => r.text)
-            .join('\n')}`
-    const inputs = [ref(entity), ...assets.map((id) => ref(this.store.get(id)))]
+        ? body.prompt || threeView.prompt
+        : String(body.prompt || '').trim()
+    requireThat(
+      prompt.length > 0 && prompt.length <= 12000,
+      'prompt required (max 12000 chars)'
+    )
+    const referenceResources = assets.map((assetId) =>
+      resources.find((resource) => resource.assetId === assetId)
+    )
+    requireThat(
+      referenceResources.every(Boolean),
+      'reference resource not found',
+      409
+    )
+    const inputs = [
+      ref(entity),
+      ...referenceResources.map((resource) => ref(resource))
+    ]
+    for (const previous of this.store
+      .list(s.projectId, 'workflow_run')
+      .filter(
+        (run) =>
+          run.sessionId === s.id &&
+          run.stage === stage &&
+          run.status === 'awaiting_input_confirmation'
+      ))
+      this.store.update(previous.id, previous.revision, {
+        status: 'cancelled',
+        cancellationReason: 'superseded_by_new_configuration'
+      })
     const business = this.store.create(s.projectId, 'workflow_run', {
       name:
         stage === 'concept'
-          ? '概念图候选'
-          : stage === 'threeview'
-            ? '正式形象三视图'
-            : '人物声音样音',
-      workflowId: stage === 'concept' ? 'CreateEntity' : 'GenerateThreeView',
+          ? '概念图 · 待确认配置'
+          : stage === 'appearance'
+            ? '形象调整 · 待确认配置'
+            : '正式形象三视图 · 待确认配置',
+      workflowId: 'CreateEntity',
       definitionVersion: 1,
       sessionId,
       targetId: entity.id,
       stage,
       grantId: grant.id,
       parentRunId: body.parentRunId || null,
-      status: 'running',
+      status: 'awaiting_input_confirmation',
       inputs,
       parameters: {
         prompt,
         count,
         seed: body.seed ?? 42,
-        steps: body.steps ?? 25
+        steps: body.steps ?? 25,
+        referenceAssetIds: assets,
+        referenceHashes: references.map((item) => item.hash),
+        expectedEntityRevision: entity.revision
       },
       outputs: [],
       childRunIds: [],
       executionRelations: [],
       createdAt: new Date().toISOString()
     })
+    return this.store.get(business.id)
+  }
+  confirmGeneration(runId, body = {}) {
+    const business = this.store.get(runId)
+    requireThat(business.kind === 'workflow_run', 'Workflow Run required')
+    requireThat(
+      business.status === 'awaiting_input_confirmation',
+      'Run is not waiting for input confirmation',
+      409
+    )
+    requireThat(body.confirm === true, 'explicit input confirmation required')
+    const s = this.session(business.sessionId)
+    const entity = this.store.sameProject(
+      business.targetId,
+      s.projectId,
+      'entity'
+    )
+    const grant = this.grant(s.id, business.stage)
+    requireThat(
+      grant.id === business.grantId,
+      'authorization scope changed',
+      409
+    )
+    const parameters = business.parameters
+    requireThat(
+      entity.revision === parameters.expectedEntityRevision,
+      'entity changed after configuration was prepared; ask Agent to refresh it',
+      409
+    )
+    const references = parameters.referenceAssetIds.map((id, i) => {
+      const asset = this.store.sameProject(id, s.projectId, 'asset')
+      requireThat(
+        asset.hash === parameters.referenceHashes[i],
+        'reference image changed',
+        409
+      )
+      return {
+        assetId: asset.id,
+        hash: asset.hash,
+        image: `sean_entity_canvas/${asset.hash}.png`
+      }
+    })
+    const running = this.store.update(business.id, business.revision, {
+      status: 'running',
+      approvedAt: new Date().toISOString(),
+      approvedBy: body.actor || 'human'
+    })
     const children = []
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < parameters.count; i++) {
       const input = {
-        prompt,
+        prompt: parameters.prompt,
         references,
-        seed: (body.seed ?? 42) + i,
-        steps: body.steps ?? 25,
+        seed: parameters.seed + i,
+        steps: parameters.steps,
         width: 1536,
         height: 1024
       }
@@ -839,14 +933,14 @@ export class Workflows {
         this.execution.prepareBusinessRun({
           projectId: s.projectId,
           targetEntityId: entity.id,
-          workflowRunId: business.id,
-          sessionId,
+          workflowRunId: running.id,
+          sessionId: s.id,
           input,
-          stage
+          stage: business.stage
         })
       )
     }
-    this.store.update(business.id, business.revision, {
+    this.store.update(running.id, running.revision, {
       childRunIds: children.map((c) => c.id),
       executionRelations: children.map((c) => ({
         scope: 'execution',
@@ -856,13 +950,14 @@ export class Workflows {
       }))
     })
     this.store.update(grant.id, grant.revision, {
-      [stage === 'concept' ? 'conceptRemaining' : 'threeViewRemaining']:
-        (stage === 'concept'
-          ? grant.conceptRemaining
-          : grant.threeViewRemaining) - count
+      [business.stage === 'threeview'
+        ? 'threeViewRemaining'
+        : 'conceptRemaining']:
+        (business.stage === 'threeview'
+          ? grant.threeViewRemaining
+          : grant.conceptRemaining) - parameters.count
     })
     this.store.update(s.id, s.revision, { status: 'working' })
-    // Schedule after transaction commits; API, CLI and tools all use this operation.
     setTimeout(
       () =>
         children.forEach((c) => {
@@ -874,7 +969,7 @@ export class Workflows {
         }),
       0
     ).unref()
-    return this.store.get(business.id)
+    return this.store.get(running.id)
   }
   selectReferences(sessionId, body) {
     const s = this.session(sessionId)
@@ -1112,6 +1207,64 @@ export class Workflows {
     }
     return selection
   }
+  confirmThreeView(entityId, body) {
+    const entity = this.store.get(entityId)
+    requireThat(entity.kind === 'entity', 'Entity required')
+    const asset = this.store.sameProject(
+      body.assetId,
+      entity.projectId,
+      'asset'
+    )
+    const run = this.store.sameProject(asset.runId, entity.projectId, 'run')
+    requireThat(
+      run.targetEntityId === entity.id &&
+        run.stage === 'threeview' &&
+        run.status === 'succeeded' &&
+        asset.mime === 'image/png',
+      'only a successful three-view image for this entity can be confirmed'
+    )
+    const parent = this.store.sameProject(
+      run.workflowRunId,
+      entity.projectId,
+      'workflow_run'
+    )
+    requireThat(
+      parent.status === 'waiting_confirmation',
+      'three-view Run is not awaiting result confirmation',
+      409
+    )
+    for (const resource of this.store
+      .list(entity.projectId, 'resource')
+      .filter(
+        (item) => item.assetId === asset.id && item.entityId === entity.id
+      ))
+      this.store.update(resource.id, resource.revision, {
+        status: 'confirmed',
+        role: 'threeview_current'
+      })
+    const selection = this.store.create(
+      entity.projectId,
+      'threeview_selection',
+      {
+        entityId: entity.id,
+        assetId: asset.id,
+        actor: 'human',
+        workflowRunId: parent.id,
+        createdAt: new Date().toISOString()
+      }
+    )
+    this.store.update(parent.id, parent.revision, {
+      status: 'succeeded',
+      selectedAssetId: asset.id,
+      resultSelectionId: selection.id
+    })
+    if (parent.sessionId) {
+      const session = this.session(parent.sessionId)
+      this.store.update(session.id, session.revision, { status: 'ready' })
+      this.maybeStartVoiceSample(session.id)
+    }
+    return selection
+  }
   confirmAppearance(entityId, body) {
     const entity = this.store.get(entityId),
       asset = this.store.sameProject(body.assetId, entity.projectId, 'asset'),
@@ -1119,7 +1272,7 @@ export class Workflows {
     requireThat(
       run.targetEntityId === entityId &&
         run.status === 'succeeded' &&
-        run.stage === 'concept' &&
+        ['concept', 'appearance'].includes(run.stage) &&
         asset.mime === 'image/png',
       'only successful concept target can be confirmed'
     )
@@ -1131,7 +1284,22 @@ export class Workflows {
     for (const resource of this.store
       .list(entity.projectId, 'resource')
       .filter((r) => r.assetId === asset.id && r.entityId === entityId))
-      this.store.update(resource.id, resource.revision, { status: 'confirmed' })
+      this.store.update(resource.id, resource.revision, {
+        status: 'confirmed',
+        role: 'appearance_current'
+      })
+    for (const resource of this.store
+      .list(entity.projectId, 'resource')
+      .filter(
+        (r) =>
+          r.entityId === entityId &&
+          r.role === 'appearance_current' &&
+          r.assetId !== asset.id
+      ))
+      this.store.update(resource.id, resource.revision, {
+        status: 'superseded',
+        role: 'appearance_candidate'
+      })
     const selection = this.store.create(
       entity.projectId,
       'appearance_selection',
@@ -1177,7 +1345,11 @@ export class Workflows {
             g.expiresAt > Date.now()
         )
       if (grant)
-        this.generate(sessionId, { parentRunId: parent.id }, 'threeview')
+        this.generate(
+          sessionId,
+          { parentRunId: parent.id, prompt: threeView.prompt },
+          'threeview'
+        )
     }
     return selection
   }
@@ -1199,7 +1371,9 @@ export class Workflows {
         : children.every((c) => terminal.has(c.status))
           ? children.some((c) => c.status !== 'succeeded')
             ? 'failed'
-            : ['concept', 'voice'].includes(run.stage)
+            : ['concept', 'appearance', 'threeview', 'voice'].includes(
+                  run.stage
+                )
               ? 'waiting_confirmation'
               : 'succeeded'
           : 'running'
@@ -1219,7 +1393,9 @@ export class Workflows {
                 ? '人物声音样音'
                 : run.stage === 'threeview'
                   ? '正侧背三视图'
-                  : '概念图候选',
+                  : run.stage === 'appearance'
+                    ? '形象调整候选'
+                    : '概念图候选',
             entityId: run.targetId,
             type: run.stage === 'voice' ? 'audio' : 'image',
             role:
@@ -1227,11 +1403,13 @@ export class Workflows {
                 ? 'voice_candidate'
                 : run.stage === 'threeview'
                   ? 'threeview'
-                  : 'concept',
+                  : run.stage === 'appearance'
+                    ? 'appearance_candidate'
+                    : 'concept',
             assetId: id,
             workflowRunId: run.id,
             sourceAssetIds: asset.sourceAssetIds,
-            status: run.stage === 'threeview' ? 'generated' : 'candidate'
+            status: 'candidate'
           })
           this.relation(run.projectId, run.targetId, resource.id, 'owns')
         }
@@ -1288,6 +1466,8 @@ export class Workflows {
         return this.addReference(sessionId, body)
       if (operation === 'generate_concepts')
         return this.generate(sessionId, body)
+      if (operation === 'prepare_appearance_adjustment')
+        return this.generate(sessionId, body, 'appearance')
       if (operation === 'generate_threeview')
         return this.generate(sessionId, body, 'threeview')
       if (operation === 'select_references')

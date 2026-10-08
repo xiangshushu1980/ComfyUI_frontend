@@ -673,7 +673,7 @@ export class PiBridge {
         tools: {
           workflow_operation: {
             operation:
-              'structure_novel | refine_chapters | propose_entities | add_reference | select_references | generate_concepts | generate_threeview | set_voice_design',
+              'structure_novel | refine_chapters | propose_entities | add_reference | select_references | generate_concepts | prepare_appearance_adjustment | generate_threeview | set_voice_design',
             parameters: {
               requestId: 'unique key',
               chapterId: 'propose_entities: chapter UUID',
@@ -683,12 +683,13 @@ export class PiBridge {
               text: 'reference text',
               assetId: 'reference image asset UUID',
               prompt:
-                'generate_concepts: optional direction; defaults from target entity and references',
-              count: '1..4 within human grant',
+                'required for generate_concepts and prepare_appearance_adjustment; generate_threeview defaults to the fixed template prompt',
+              count:
+                '1..4 images total within the human grant; default 2 per prepared image Run',
               seed: 'optional integer, default 42',
               steps: 'optional integer 1..50, default 25',
               referenceIds:
-                'optional ordered image asset UUIDs; use select_references to persist the chosen subset',
+                'optional ordered entity image asset UUIDs for this Run only; manually-added reference images and prior concept/appearance images are valid; each Run has its own selection',
               voiceDescription:
                 'set_voice_design: text-designed character voice direction; required, max 1200 chars',
               sampleText:

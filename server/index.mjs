@@ -155,6 +155,13 @@ export function createStudioServer({
           )
         }
         if (
+          (m = path.match(/^\/workflow-sessions\/([^/]+)\/archive$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          return send(store.write(path, b, () => workflows.close(m[1])))
+        }
+        if (
           (m = path.match(/^\/workflow-sessions\/([^/]+)\/context$/)) &&
           req.method === 'GET'
         )
@@ -210,6 +217,7 @@ export function createStudioServer({
               working: false,
               summary: '',
               piWebUrl: null,
+              sessionFound: false,
               messageCount: null,
               turnCount: null
             })
@@ -220,6 +228,7 @@ export function createStudioServer({
               summary: '',
               piWebUrl: null,
               verified: false,
+              sessionFound: false,
               messageCount: null,
               turnCount: null,
               workspaceId: hash(binding.cwd).slice(0, 16),
@@ -253,15 +262,18 @@ export function createStudioServer({
             ),
             summary: summary.slice(-600),
             piWebUrl: pi.publicBinding(binding).piWebUrl,
+            sessionFound: true,
             verified: binding.guardVersion === 1 && binding.status === 'bound',
             messageCount:
               nativeSession.messageCount ??
               (binding.guardVersion === 1 && binding.status === 'bound'
                 ? messages.length
                 : null),
-            turnCount: binding.guardVersion === 1 && binding.status === 'bound'
-              ? messages.filter((m) => ['user', 'human'].includes(m.role)).length
-              : null,
+            turnCount:
+              binding.guardVersion === 1 && binding.status === 'bound'
+                ? messages.filter((m) => ['user', 'human'].includes(m.role))
+                    .length
+                : null,
             createdAt: nativeSession.created || null,
             modifiedAt: nativeSession.modified || null,
             firstMessage: nativeSession.firstMessage || '',
@@ -470,6 +482,17 @@ export function createStudioServer({
           const snap = store.snapshot(m[1])
           snap.objects = snap.objects.map(publicObject)
           return send(snap)
+        }
+        if (
+          (m = path.match(/^\/projects\/([^/]+)\/pi-sync$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          requireThat(
+            typeof b.requestId === 'string' && b.requestId.length > 0,
+            'requestId required'
+          )
+          return send(await pi.syncProject(m[1]))
         }
         if ((m = path.match(/^\/projects\/([^/]+)\/events$/))) {
           if (req.headers.accept?.includes('text/event-stream')) {

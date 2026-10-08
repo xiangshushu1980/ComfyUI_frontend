@@ -118,6 +118,33 @@ export class Workflows {
     )
     return session
   }
+  close(id) {
+    const session = this.session(id)
+    requireThat(!session.closed, 'Workflow conversation already removed', 409)
+    const activeTurn = this.store
+      .list(session.projectId, 'pi_turn')
+      .some(
+        (turn) =>
+          turn.discussionId === session.discussionId &&
+          [
+            'prepared',
+            'sending',
+            'received',
+            'accepted',
+            'delivery_unknown'
+          ].includes(turn.status)
+      )
+    requireThat(
+      !activeTurn,
+      'Cannot remove a conversation with an active or uncertain Pi turn',
+      409
+    )
+    return this.store.update(session.id, session.revision, {
+      closed: true,
+      status: 'closed',
+      closedAt: new Date().toISOString()
+    })
+  }
   context(id) {
     const session = this.session(id),
       all = this.store.list(session.projectId)

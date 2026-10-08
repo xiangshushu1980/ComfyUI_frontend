@@ -128,7 +128,9 @@ export class PiBridge {
   }
   async nativeSessionForBinding(binding) {
     const catalog = await this.request('/api/sessions')
-    const session = catalog.sessions?.find((item) => item.id === binding.sessionId)
+    const session = catalog.sessions?.find(
+      (item) => item.id === binding.sessionId
+    )
     if (session && session.cwd !== binding.cwd)
       throw Object.assign(
         new Error(
@@ -137,6 +139,79 @@ export class PiBridge {
         { status: 409 }
       )
     return session || null
+  }
+  async syncProject(projectId) {
+    this.store.project(projectId)
+    const catalog = await this.request('/api/sessions')
+    const nativeSessions = catalog.sessions || []
+    const bindings = this.store.list(projectId, 'pi_binding')
+    const workspaceDirs = new Set(bindings.map((binding) => binding.cwd))
+    const boundNativeIds = new Set()
+    let foundBindings = 0
+    let resetEmpty = 0
+    let missingWithHistory = 0
+    let uncertainCreation = 0
+    let workspaceMismatches = 0
+    for (const binding of bindings) {
+      if (!binding.sessionId) continue
+      const native = nativeSessions.find(
+        (session) => session.id === binding.sessionId
+      )
+      if (native) {
+        if (native.cwd !== binding.cwd) {
+          workspaceMismatches++
+          continue
+        }
+        foundBindings++
+        boundNativeIds.add(native.id)
+        continue
+      }
+      if (['creating', 'creation_unknown'].includes(binding.status)) {
+        uncertainCreation++
+        continue
+      }
+      const hasTurns = this.store
+        .list(projectId, 'pi_turn')
+        .some((turn) => turn.discussionId === binding.discussionId)
+      const current = this.store.get(binding.id)
+      if (!hasTurns) {
+        this.store.transaction(() =>
+          this.store.update(current.id, current.revision, {
+            sessionId: null,
+            guardVersion: null,
+            status: 'prepared',
+            error: null,
+            previousEmptySessionId: current.sessionId
+          })
+        )
+        resetEmpty++
+      } else {
+        if (current.status !== 'session_missing')
+          this.store.transaction(() =>
+            this.store.update(current.id, current.revision, {
+              status: 'session_missing',
+              error:
+                'PiWeb session is absent from the native session catalog; history retained.'
+            })
+          )
+        missingWithHistory++
+      }
+    }
+    const workspaceSessions = nativeSessions.filter((session) =>
+      workspaceDirs.has(session.cwd)
+    )
+    return {
+      checkedBindings: bindings.length,
+      foundBindings,
+      resetEmpty,
+      missingWithHistory,
+      uncertainCreation,
+      workspaceMismatches,
+      workspaceSessionCount: workspaceSessions.length,
+      unboundWorkspaceSessions: workspaceSessions.filter(
+        (session) => !boundNativeIds.has(session.id)
+      ).length
+    }
   }
   directInput(capability, body) {
     const binding = this.authenticate(capability, body.sessionId)
@@ -214,11 +289,32 @@ export class PiBridge {
     let b = await this.prepareWorkspace(discussionId)
     if (b.sessionId) {
       const nativeSession = await this.nativeSessionForBinding(b)
-      requireThat(
-        nativeSession,
-        'Cannot verify the PiWeb session workspace; refusing cross-project navigation',
-        409
-      )
+      if (!nativeSession) {
+        const hasTurns = this.store
+          .list(b.projectId, 'pi_turn')
+          .some((turn) => turn.discussionId === discussionId)
+        requireThat(
+          !hasTurns,
+          'PiWeb session is missing, but this Studio conversation has history. Create a new Workflow conversation to continue safely.',
+          409
+        )
+        requireThat(
+          !['creating', 'creation_unknown'].includes(b.status),
+          'PiWeb session creation is uncertain; synchronize before retrying',
+          409
+        )
+        const current = this.store.get(b.id)
+        b = this.store.transaction(() =>
+          this.store.update(current.id, current.revision, {
+            sessionId: null,
+            guardVersion: null,
+            status: 'prepared',
+            error: null,
+            previousEmptySessionId: current.sessionId
+          })
+        )
+        return this.launch(discussionId, body)
+      }
       let tools
       try {
         tools = await this.request(`/api/agent/${b.sessionId}`, {
@@ -332,8 +428,7 @@ export class PiBridge {
       })
       for (let attempt = 0; attempt < 40; attempt++) {
         const next = await this.nativeSessionForBinding(binding)
-        if (next)
-          return this.publicBinding(this.store.get(binding.id))
+        if (next) return this.publicBinding(this.store.get(binding.id))
         await new Promise((resolve) => setTimeout(resolve, 250))
       }
       throw Object.assign(

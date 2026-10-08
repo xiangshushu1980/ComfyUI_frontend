@@ -25,120 +25,7 @@
         <option v-for="p in projects" :key="p.id" :value="p.id">
           {{ p.name }}
         </option></select
-      ><button @click="newProject">＋ 新建工程</button>
-      <template v-if="canvasMode === 'story'">
-        <label>业务 Workflow</label>
-        <section
-          v-for="d in definitions"
-          :key="d.id"
-          :class="['workflow-item', { chosen: activeWorkflowId === d.id }]"
-        >
-          <button
-            class="workflow-entry"
-            :aria-expanded="activeWorkflowId === d.id"
-            :disabled="navigationBusy"
-            @click="selectWorkflow(d.id)"
-          >
-            <strong>◇ {{ d.name }}</strong>
-            <small>{{ workflowStatus(d.id) }}</small>
-          </button>
-          <button
-            class="workflow-continue"
-            :disabled="
-              navigationBusy ||
-              !projectId ||
-              (d.target === 'entity' && !workflowTarget(d.id))
-            "
-            @click="enterWorkflow(d.id)"
-          >
-            {{
-              navigationBusy && activeWorkflowId === d.id
-                ? '正在打开…'
-                : workspaceTrustPending(d.id)
-                  ? trustEntryOpenedFor === d.id
-                    ? '验证并打开 PiWeb 会话 ↗'
-                    : workspaceUrl && activeWorkflowId === d.id
-                      ? '在 PiWeb 打开工作区 ↗'
-                      : '打开 PiWeb 工作区 ↗'
-                  : '继续 PiWeb ↗'
-            }}
-          </button>
-          <div v-if="activeWorkflowId === d.id" class="workflow-details">
-            <div class="agent-title">
-              π <strong>Workflow Agent</strong
-              ><span :class="{ working: agentStatus.working }">{{
-                agentStatus.working
-                  ? '正在工作'
-                  : statusName(currentSession?.status)
-              }}</span>
-            </div>
-            <label v-if="d.target === 'entity'"
-              >目标实体
-              <select
-                :value="workflowTarget(d.id)"
-                :disabled="navigationBusy"
-                @change="changeWorkflowTarget(d.id, $event)"
-              >
-                <option value="">选择目标实体</option>
-                <option
-                  v-for="entity in entities"
-                  :key="entity.id"
-                  :value="entity.id"
-                >
-                  {{ entity.name }}
-                </option>
-              </select>
-            </label>
-            <p
-              v-if="d.target === 'entity' && !workflowTarget(d.id)"
-              class="hint"
-            >
-              先选择目标实体，再继续对应 PiWeb 会话。
-            </p>
-            <p>{{ currentSession?.goal || '从左侧业务 Workflow 进入。' }}</p>
-            <p v-if="currentSession" class="session-identity">
-              会话 {{ currentSession.id.slice(0, 8) }} ·
-              {{ objectById(currentSession.targetId)?.name || '工程' }}
-            </p>
-            <pre class="agent-summary">{{
-              agentStatus.summary.slice(-360) || '暂无输出'
-            }}</pre>
-            <template
-              v-if="
-                currentSession &&
-                ['CreateEntity', 'GenerateThreeView'].includes(
-                  currentSession.workflowId
-                )
-              "
-              ><h3>本次流程授权</h3>
-              <label v-if="currentSession.workflowId === 'CreateEntity'"
-                >概念候选数<select v-model.number="conceptCount">
-                  <option v-for="n in [0, 1, 2, 3, 4]" :key="n" :value="n">
-                    {{ n }}
-                  </option>
-                </select></label
-              ><label class="toggle"
-                ><input v-model="allowThreeView" type="checkbox" />{{
-                  currentSession.workflowId === 'CreateEntity'
-                    ? '确认形象后自动生成三视图'
-                    : '授权生成三视图'
-                }}</label
-              ><button @click="authorizeWorkflow">授权有限流程</button>
-              <p class="hint">
-                Agent 自动绑定输入。正式形象仍由你确认。
-              </p></template
-            >
-            <p v-if="agentError" class="error">{{ agentError }}</p>
-            <p v-if="workspaceToTrust" class="hint">
-              请先在 PiWeb 手动信任此工程工作区，再返回这里点“验证并打开 PiWeb
-              会话”。Studio 会核对会话所属工程并检查它可打开：<br />{{
-                workspaceToTrust
-              }}
-            </p>
-          </div>
-        </section>
-      </template>
-      <label>长期数据</label
+      ><button @click="newProject">＋ 新建工程</button> <label>长期数据</label
       ><button @click="importing = true">＋ 导入整本小说</button>
       <label>实体</label
       ><button
@@ -193,12 +80,22 @@
           </div>
         </div>
         <div class="canvas-actions">
+          <button
+            v-if="canvasMode === 'agents'"
+            :disabled="navigationBusy || !projectId"
+            @click="syncPiProject"
+          >
+            {{ navigationBusy ? '同步中…' : '同步 PiWeb' }}
+          </button>
           <button @click="toggleCanvasMode">
             {{ canvasMode === 'agents' ? '返回业务画布' : 'Agent 工作流关系' }}
           </button>
           <button @click="fit">适配画布</button>
         </div>
       </nav>
+      <div v-if="canvasMode === 'agents' && syncMessage" class="sync-message">
+        {{ syncMessage }}
+      </div>
       <div ref="canvasHost" class="canvas-host">
         <canvas ref="canvasElement" />
         <div
@@ -260,8 +157,8 @@
         </div>
         <div class="legend">
           <template v-if="canvasMode === 'agents'">
-            工程包含 Workflow 和工作区 · Workflow 关联独立对话 · 多个 Workflow
-            可共用同一工作区
+            Studio / Pi 项目包含 Workflow · 每个 Workflow 连接自己的多个对话 ·
+            Pi 工作目录在项目属性中查看
           </template>
           <template v-else>
             长期关系：实线 <span>执行绑定：虚线 · 已完成 Run 保留来源记录</span>
@@ -276,32 +173,34 @@
         <h2>{{ selected.name || kindName(selected.kind) }}</h2>
         <p>{{ selected.description || selected.brief }}</p>
         <template v-if="selected.kind === 'agent_project'">
-          <p>影片工程中的 Agent 运行关系总览。</p>
+          <p>
+            一个影片工程对应一个 Studio / Pi 项目根节点；Pi
+            工作目录作为项目属性管理。
+          </p>
           <p>
             {{ selected.workflowCount }} 个 Workflow ·
-            {{ selected.workspaceCount }} 个工作区 ·
             {{ selected.conversationCount }} 个对话
           </p>
-          <button @click="switchCanvasMode('story')">返回业务画布</button>
-        </template>
-        <template v-if="selected.kind === 'agent_workspace'">
-          <p>PiWeb 工作目录：{{ selected.workspaceLabel }}</p>
-          <p>
-            {{ selected.workflowIds.length }} 个 Workflow ·
-            {{ selected.conversationIds.length }} 个对话共用此目录
-          </p>
-          <p>对话历史彼此独立；工程业务数据通过 Studio 工具共享。</p>
-          <button
-            :disabled="
-              navigationBusy || !hasAgentWorkspaceBinding(selected.workspaceId)
-            "
-            @click="openAgentWorkspace(selected)"
+          <h3>Pi 工作目录</h3>
+          <p v-if="!selected.workspaces.length">首次创建对话后自动建立。</p>
+          <div
+            v-for="workspace in selected.workspaces"
+            :key="workspace.workspaceId"
           >
-            在 PiWeb 打开此工作区 ↗
-          </button>
-          <p v-if="selected.status === '待创建'" class="hint">
-            创建第一个 Workflow 对话后，Studio 会生成此工程的工作目录。
-          </p>
+            <p>
+              {{ workspace.workspaceLabel }} ·
+              {{ workspace.status === '待创建' ? '待创建' : '已准备' }}
+            </p>
+            <button
+              :disabled="
+                navigationBusy ||
+                !hasAgentWorkspaceBinding(workspace.workspaceId)
+              "
+              @click="openAgentWorkspace(workspace)"
+            >
+              在 PiWeb 打开工作目录 ↗
+            </button>
+          </div>
         </template>
         <template v-if="selected.kind === 'workflow_agent'">
           <p>
@@ -334,7 +233,7 @@
             :disabled="navigationBusy"
             @click="createWorkflowConversation(selected.workflowId)"
           >
-            新建独立对话 ＋
+            添加对话 ＋
           </button>
         </template>
         <template v-if="selected.kind === 'workflow_conversation'">
@@ -363,16 +262,56 @@
           <pre v-if="selected.summary" class="agent-node-summary">{{
             selected.summary
           }}</pre>
+          <template
+            v-if="
+              ['CreateEntity', 'GenerateThreeView'].includes(
+                selected.workflowId
+              )
+            "
+          >
+            <h3>本次流程授权</h3>
+            <label v-if="selected.workflowId === 'CreateEntity'">
+              概念候选数
+              <select v-model.number="conceptCount">
+                <option v-for="n in [0, 1, 2, 3, 4]" :key="n" :value="n">
+                  {{ n }}
+                </option>
+              </select>
+            </label>
+            <label class="toggle">
+              <input v-model="allowThreeView" type="checkbox" />
+              {{
+                selected.workflowId === 'CreateEntity'
+                  ? '确认形象后自动生成三视图'
+                  : '授权生成三视图'
+              }}
+            </label>
+            <button @click="authorizeWorkflow(selected.workflowSessionId)">
+              授权有限流程
+            </button>
+          </template>
           <button
-            :disabled="navigationBusy"
+            :disabled="navigationBusy || selected.status === 'session_missing'"
             @click="openAgentConversation(selected)"
           >
             {{
-              selected.verified || trustEntryOpenedFor === selected.workflowId
-                ? '打开此 PiWeb 对话'
-                : '打开工作区并信任'
+              selected.status === 'session_missing'
+                ? 'PiWeb 对话缺失，先从 Workflow 新建'
+                : !selected.nativeSessionId
+                  ? '创建 PiWeb 对话'
+                  : selected.verified ||
+                      trustEntryOpenedFor === selected.workflowId
+                    ? '打开此 PiWeb 对话'
+                    : '打开工作区并信任'
             }}
             ↗
+          </button>
+          <button
+            class="danger"
+            :disabled="navigationBusy"
+            @click="removeWorkflowConversation(selected)"
+          >
+            从 Studio 移除此对话
           </button>
         </template>
         <p
@@ -380,7 +319,6 @@
             agentError &&
             [
               'agent_project',
-              'agent_workspace',
               'workflow_agent',
               'workflow_conversation'
             ].includes(selected.kind)
@@ -394,10 +332,7 @@
             原文 {{ selected.sourceId }} · {{ selected.anchorIds?.join(' · ') }}
           </p>
           <pre>{{ chapterText(selected) }}</pre>
-          <button @click="enterWorkflow('ExtractEntities')">
-            在 PiWeb 提取实体 ↗
-          </button></template
-        >
+        </template>
         <template v-if="selected.kind === 'source'"
           ><p>原文来源 · {{ selected.anchors?.length }} 段</p>
           <button @click="structureSource(selected)">
@@ -405,10 +340,7 @@
           </button></template
         >
         <template v-if="selected.kind === 'entity'"
-          ><button class="primary" @click="enterWorkflow('CreateEntity')">
-            进入实体创建 Workflow ↗
-          </button>
-          <h3>参考元素</h3>
+          ><h3>参考元素</h3>
           <textarea
             v-model="referenceText"
             placeholder="参考描述、风格或外观要求"
@@ -562,6 +494,13 @@ type Obj = {
   // oxlint-disable-next-line typescript/no-explicit-any
   [key: string]: any
 }
+type AgentWorkspace = Obj & {
+  workspaceId: string
+  workspaceLabel: string
+  status: string
+  workflowIds: string[]
+  conversationIds: string[]
+}
 const projects = ref<Obj[]>([]),
   libraryOpen = ref(true),
   objects = ref<Obj[]>([]),
@@ -587,6 +526,7 @@ type AgentStatus = {
   summary: string
   piWebUrl: string | null
   verified?: boolean
+  sessionFound?: boolean
   messageCount?: number | null
   turnCount?: number | null
   createdAt?: string | null
@@ -597,20 +537,13 @@ type AgentStatus = {
   workspaceLabel?: string
 }
 const agentStates = ref<Record<string, AgentStatus>>({})
-const agentStatus = computed(
-  () =>
-    agentStates.value[sessionId.value] || {
-      working: false,
-      summary: '',
-      piWebUrl: ''
-    }
-)
 const activeWorkflowId = ref(''),
   workflowTargets = ref<Record<string, string>>({}),
   navigationBusy = ref(false),
   workspaceUrl = ref(''),
   trustEntryOpenedFor = ref('')
 const agentError = ref(''),
+  syncMessage = ref(''),
   workspaceToTrust = ref(''),
   error = ref('')
 const importing = ref(false),
@@ -655,7 +588,7 @@ const agentGraphNodes = computed<Obj[]>(() => {
   if (!project.value) return []
   const projectNodeId = `agent-project:${project.value.id}`
   const bindings = objects.value.filter((o) => o.kind === 'pi_binding')
-  const workspaceMap = new Map<string, Obj>()
+  const workspaceMap = new Map<string, AgentWorkspace>()
   for (const binding of bindings) {
     const id = binding.workspaceId || `project:${project.value.id}`
     if (!workspaceMap.has(id))
@@ -688,8 +621,9 @@ const agentGraphNodes = computed<Obj[]>(() => {
   const workspaceById = new Map(
     [...workspaceMap.values()].map((node) => [node.workspaceId, node])
   )
+  const graphSessions = sessions.value.filter((session) => !session.closed)
   const workflowNodes = definitions.value.map((definition) => {
-    const related = sessions.value.filter(
+    const related = graphSessions.filter(
       (session) => session.workflowId === definition.id
     )
     const workspaceIds = new Set<string>()
@@ -698,11 +632,7 @@ const agentGraphNodes = computed<Obj[]>(() => {
         (item) => item.discussionId === session.discussionId
       )
       if (binding?.workspaceId) workspaceIds.add(binding.workspaceId)
-      else if (workspaceMap.size === 1)
-        workspaceIds.add(workspaceMap.keys().next().value as string)
     }
-    if (!related.length && workspaceMap.size === 1)
-      workspaceIds.add(workspaceMap.keys().next().value as string)
     for (const workspaceId of workspaceIds) {
       const workspace = workspaceById.get(workspaceId)
       if (workspace && !workspace.workflowIds.includes(definition.id))
@@ -724,16 +654,12 @@ const agentGraphNodes = computed<Obj[]>(() => {
       preview: `${related.length} 个对话 · ${related.filter((session) => agentStates.value[session.id]?.working).length} 个工作中 · ${definition.target === 'entity' ? '按实体区分' : '工程级'}`
     }
   })
-  const conversationNodes = sessions.value.map((session) => {
+  const conversationNodes = graphSessions.map((session) => {
     const binding = bindings.find(
       (item) => item.discussionId === session.discussionId
     )
     const state = agentStates.value[session.id]
-    const workspaceId =
-      binding?.workspaceId ||
-      (workspaceMap.size === 1
-        ? (workspaceMap.keys().next().value as string)
-        : '')
+    const workspaceId = binding?.workspaceId || ''
     const workspace = workspaceById.get(workspaceId)
     if (workspace && !workspace.conversationIds.includes(session.id))
       workspace.conversationIds.push(session.id)
@@ -741,11 +667,16 @@ const agentGraphNodes = computed<Obj[]>(() => {
     const definition = definitions.value.find(
       (item) => item.id === session.workflowId
     )
-    const status = state?.working
-      ? 'working'
-      : binding?.status === 'guard_unverified'
-        ? 'guard_unverified'
-        : session.status || 'ready'
+    const status =
+      state?.sessionFound === false || binding?.status === 'session_missing'
+        ? 'session_missing'
+        : !binding?.sessionId
+          ? 'pi_unbound'
+          : state?.working
+            ? 'working'
+            : binding.status === 'guard_unverified'
+              ? 'guard_unverified'
+              : session.status || 'ready'
     return {
       id: `agent-conversation:${session.id}`,
       kind: 'workflow_conversation',
@@ -793,11 +724,14 @@ const agentGraphNodes = computed<Obj[]>(() => {
       workflowCount: workflowNodes.length,
       workspaceCount: workspaceNodes.length,
       conversationCount: conversationNodes.length,
-      workspaceIds: workspaceNodes.map((node) => node.id),
+      workspaces: workspaceNodes.map((workspace) => ({
+        workspaceId: workspace.workspaceId,
+        workspaceLabel: workspace.workspaceLabel,
+        status: workspace.status
+      })),
       workflowNodeIds: workflowNodes.map((node) => node.id),
-      preview: `${workflowNodes.length} 个 Workflow · ${workspaceNodes.length} 个工作区 · ${conversationNodes.length} 个对话`
+      preview: `${workflowNodes.length} 个 Workflow · ${conversationNodes.length} 个对话 · ${workspaceNodes.length} 个 Pi 工作目录`
     },
-    ...workspaceNodes,
     ...workflowNodes,
     ...conversationNodes
   ]
@@ -812,8 +746,7 @@ const objectById = (id: string) =>
   agentGraphNodes.value.find((o) => o.id === id)
 const contentUrl = (id: string) => `/studio-api/v1/assets/${id}/content`
 const names: Record<string, string> = {
-  agent_project: '影片工程 Agent 总览',
-  agent_workspace: 'Agent Workspace',
+  agent_project: 'Studio / Pi 项目',
   workflow_agent: 'Workflow Agent',
   workflow_conversation: 'Agent 对话',
   chapter: '章节',
@@ -829,6 +762,8 @@ const names: Record<string, string> = {
   ready: '等待目标',
   bound: '已连接',
   guard_unverified: '等待 PiWeb 验证',
+  session_missing: 'PiWeb 对话缺失',
+  pi_unbound: 'PiWeb 对话未创建',
   creation_unknown: '创建待核对',
   working: '正在工作',
   running: '执行中',
@@ -858,10 +793,10 @@ const formatAgentTime = (value?: string | null) => {
 }
 function agentWorkspaceLabel(workspaceId?: string) {
   return (
-    agentGraphNodes.value.find(
-      (node) =>
-        node.kind === 'agent_workspace' && node.workspaceId === workspaceId
-    )?.workspaceLabel || '尚未关联工作区'
+    agentGraphNodes.value
+      .find((node) => node.kind === 'agent_project')
+      ?.workspaces?.find((item: Obj) => item.workspaceId === workspaceId)
+      ?.workspaceLabel || '尚未关联工作区'
   )
 }
 function agentWorkspaceLabels(workspaceIds: string[] = []) {
@@ -901,11 +836,36 @@ async function refresh() {
     refreshing = false
   }
 }
+async function syncPiProject() {
+  if (!projectId.value || navigationBusy.value) return
+  navigationBusy.value = true
+  agentError.value = ''
+  syncMessage.value = ''
+  try {
+    const result = await studioApi(`/projects/${projectId.value}/pi-sync`, {
+      requestId: requestId()
+    })
+    await refresh()
+    await refreshAgent()
+    syncMessage.value =
+      `PiWeb 同步完成：${result.foundBindings} 个对话有效，` +
+      `${result.resetEmpty} 个空会话可重新创建，` +
+      `${result.missingWithHistory} 个有历史的会话缺失，` +
+      `${result.uncertainCreation} 个创建状态待核对。`
+    if (result.unboundWorkspaceSessions)
+      syncMessage.value += `另有 ${result.unboundWorkspaceSessions} 个 PiWeb 会话未绑定到 Studio Workflow。`
+  } catch (e) {
+    syncMessage.value = `PiWeb 同步失败：${e instanceof Error ? e.message : String(e)}`
+  } finally {
+    navigationBusy.value = false
+  }
+}
 async function openProject() {
   events?.close()
   project.value = undefined
   objects.value = []
   selected.value = null
+  syncMessage.value = ''
   navigationPath.value = []
   sessionId.value = ''
   agentStates.value = {}
@@ -1178,18 +1138,6 @@ function workflowBinding(workflowId: string) {
 function workspaceTrustPending(workflowId: string) {
   return workflowBinding(workflowId)?.status === 'guard_unverified'
 }
-function workflowStatus(workflowId: string) {
-  const session = workflowSession(workflowId)
-  if (workspaceTrustPending(workflowId)) return '工作区待信任'
-  if (session)
-    return agentStates.value[session.id]?.working
-      ? '正在工作'
-      : statusName(session.status)
-  return definitions.value.find((d) => d.id === workflowId)?.target ===
-    'entity' && !workflowTarget(workflowId)
-    ? '待选择实体'
-    : '未开始'
-}
 async function prepareWorkflow(workflowId: string) {
   if (!projectId.value) throw new Error('请先选择工程')
   const definition = definitions.value.find((d) => d.id === workflowId)!
@@ -1229,38 +1177,6 @@ async function createWorkflowConversation(workflowId: string) {
   } catch (e) {
     agentError.value = e instanceof Error ? e.message : String(e)
   }
-}
-async function selectWorkflow(workflowId: string) {
-  activeWorkflowId.value = workflowId
-  sessionId.value = workflowSession(workflowId)?.id || ''
-  agentError.value = ''
-  workspaceToTrust.value = ''
-  workspaceUrl.value = ''
-  trustEntryOpenedFor.value = ''
-  if (!projectId.value || !workflowTarget(workflowId)) return
-  const project = projectId.value
-  try {
-    const session = await prepareWorkflow(workflowId)
-    await refresh()
-    if (projectId.value === project && activeWorkflowId.value === workflowId)
-      sessionId.value = session.id
-    if (
-      projectId.value === project &&
-      activeWorkflowId.value === workflowId &&
-      workspaceTrustPending(workflowId)
-    ) {
-      await showWorkspaceTrustEntry(workflowId, session)
-      return
-    }
-    await refreshAgent()
-  } catch (e) {
-    if (activeWorkflowId.value === workflowId)
-      agentError.value = String(e instanceof Error ? e.message : e)
-  }
-}
-async function changeWorkflowTarget(workflowId: string, event: Event) {
-  workflowTargets.value[workflowId] = (event.target as HTMLSelectElement).value
-  await selectWorkflow(workflowId)
 }
 async function enterWorkflow(workflowId: string, entityId?: string) {
   if (navigationBusy.value) return
@@ -1474,19 +1390,18 @@ async function navigatePiWeb(session: Obj, tab: Window | null) {
   await refreshAgent()
 }
 async function refreshAgent() {
-  const chosen = definitions.value
-    .map((d) => workflowSession(d.id))
-    .filter(
-      (s): s is Obj =>
-        !!s &&
-        objects.value.some(
-          (b) =>
-            b.kind === 'pi_binding' &&
-            b.discussionId === s.discussionId &&
-            b.sessionId
-        )
-    )
+  const chosen = sessions.value.filter(
+    (session) =>
+      !session.closed &&
+      objects.value.some(
+        (binding) =>
+          binding.kind === 'pi_binding' &&
+          binding.discussionId === session.discussionId &&
+          binding.sessionId
+      )
+  )
   const project = projectId.value
+  agentStates.value = {}
   await Promise.allSettled(
     chosen.map(async (session) => {
       const status = await studioApi(
@@ -1501,8 +1416,8 @@ async function refreshAgent() {
       selected.value
   }
 }
-async function authorizeWorkflow() {
-  const s = currentSession.value
+async function authorizeWorkflow(sessionIdOverride = sessionId.value) {
+  const s = sessions.value.find((session) => session.id === sessionIdOverride)
   if (!s) return
   try {
     await studioApi(`/workflow-sessions/${s.id}/authorize`, {
@@ -1660,6 +1575,35 @@ async function openAgentConversation(node: Obj) {
     return
   }
   await openPiWeb()
+}
+async function removeWorkflowConversation(node: Obj) {
+  const session = sessions.value.find(
+    (item) => item.id === node.workflowSessionId
+  )
+  if (!session) {
+    agentError.value = '这条 Workflow 对话已不存在，请刷新工程。'
+    return
+  }
+  if (
+    !window.confirm(
+      '从 Studio 关系图移除此对话？PiWeb 中的原生会话和历史记录会保留。'
+    )
+  )
+    return
+  navigationBusy.value = true
+  agentError.value = ''
+  try {
+    await studioApi(`/workflow-sessions/${session.id}/archive`, {
+      requestId: requestId()
+    })
+    await refresh()
+    selected.value = null
+    syncMessage.value = '已从 Studio 关系图移除；PiWeb 原生会话仍保留。'
+  } catch (e) {
+    agentError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    navigationBusy.value = false
+  }
 }
 async function enterResourceSession(resource: Obj) {
   const run = objectById(resource.workflowRunId)
@@ -1912,7 +1856,6 @@ function projectAgentGraph() {
     return
   }
   const projectNode = nodes.find((node) => node.kind === 'agent_project')!
-  const workspaces = nodes.filter((node) => node.kind === 'agent_workspace')
   const workflows = nodes.filter((node) => node.kind === 'workflow_agent')
   const conversations = nodes.filter(
     (node) => node.kind === 'workflow_conversation'
@@ -1933,10 +1876,6 @@ function projectAgentGraph() {
   }
   const totalHeight = Math.max(190, cursor - 70)
   positions.set(projectNode.id, [0, totalHeight / 2 - 90])
-  workspaces.forEach((workspace, index) => {
-    const center = (index + 0.5) * (totalHeight / workspaces.length)
-    positions.set(workspace.id, [850, center - 80])
-  })
   for (const node of nodes) {
     const workflowName = definitions.value.find(
       (definition) => definition.id === node.workflowId
@@ -1956,11 +1895,9 @@ function projectAgentGraph() {
     n.color =
       node.kind === 'agent_project'
         ? '#2a3e52'
-        : node.kind === 'agent_workspace'
-          ? '#36534d'
-          : node.kind === 'workflow_agent'
-            ? '#245853'
-            : '#51466b'
+        : node.kind === 'workflow_agent'
+          ? '#245853'
+          : '#51466b'
     n.bgcolor = '#152431'
     n.addInput('', '*')
     n.addOutput('', '*')
@@ -1999,17 +1936,11 @@ function projectAgentGraph() {
     const to = graph.getNodeById(toNodeId(toId))
     if (from && to) from.connect(0, to, 0)
   }
-  for (const workspace of workspaces) link(projectNode.id, workspace.id)
   for (const workflow of workflows) {
     link(projectNode.id, workflow.id)
-    for (const workspaceId of workflow.workspaceIds || [])
-      link(workflow.id, `agent-workspace:${workspaceId}`)
     for (const conversationId of workflow.conversationIds || [])
       link(workflow.id, conversationId)
   }
-  for (const workspace of workspaces)
-    for (const sessionId of workspace.conversationIds || [])
-      link(workspace.id, `agent-conversation:${sessionId}`)
   canvas.setDirty(true, true)
 }
 function resize() {
@@ -2379,6 +2310,20 @@ nav small {
   margin-left: auto;
   margin-right: 0;
 }
+.sync-message {
+  position: absolute;
+  z-index: 5;
+  top: 66px;
+  left: 50%;
+  max-width: min(720px, 70vw);
+  transform: translateX(-50%);
+  padding: 9px 14px;
+  border: 1px solid #416258;
+  border-radius: 8px;
+  background: #17332fef;
+  color: #c8e5d8;
+  font-size: 12px;
+}
 .breadcrumbs {
   display: flex;
   align-items: center;
@@ -2531,45 +2476,6 @@ nav small {
     opacity: 0.35;
   }
 }
-.agent-title {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.agent-title > span {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--muted);
-}
-.working {
-  color: #97cfb5 !important;
-}
-.workflow-details select,
-.workflow-details > button {
-  width: 100%;
-  margin-top: 12px;
-}
-.workflow-details > p {
-  font-size: 11px;
-  color: var(--muted);
-}
-.agent-summary {
-  max-height: 120px;
-  overflow: auto;
-  color: #b0c1cf;
-  font-size: 11px;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 18px;
-}
-.workflow-details h3 {
-  font-weight: 500;
-  font-size: 12px;
-  margin-top: 25px;
-}
-.workflow-details label {
-  font-size: 11px;
-  margin: 10px 0;
-}
 .inspector {
   position: absolute;
   top: 80px;
@@ -2699,46 +2605,5 @@ nav small {
 }
 .execution-modal :deep(.native-workflow) {
   top: 50px;
-}
-.workflow-item {
-  margin-bottom: 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.workflow-entry {
-  background: #203740;
-  width: 100%;
-  text-align: left;
-  border: 0;
-  border-radius: 0;
-}
-.workflow-entry strong {
-  font-weight: 500;
-}
-.workflow-continue {
-  width: 100%;
-  padding: 5px 11px;
-  text-align: left;
-  border: 0;
-  border-top: 1px solid var(--line);
-  border-radius: 0;
-  color: #b5d9cc;
-  font-size: 11px;
-}
-.workflow-details {
-  overflow: auto;
-  padding: 12px;
-  border: 0;
-}
-.workflow-details select {
-  width: 100%;
-}
-.session-identity {
-  color: var(--muted);
-  font-size: 10px;
-}
-.workflow-details a {
-  color: #a5d9c7;
 }
 </style>

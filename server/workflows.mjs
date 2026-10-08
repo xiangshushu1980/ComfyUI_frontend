@@ -27,6 +27,8 @@ export const definitions = [
     target: 'entity',
     operations: [
       'add_reference',
+      'update_resource',
+      'update_entity_profile',
       'generate_concepts',
       'prepare_appearance_adjustment',
       'select_references',
@@ -71,6 +73,29 @@ export class Workflows {
       })
       this.relation(projectId, chapter.sourceId, legacy.id, 'contains')
     }
+    for (const entity of this.store.list(projectId, 'entity'))
+      this.ensureEntityIntroduction(entity)
+  }
+  ensureEntityIntroduction(entity) {
+    const current = this.store
+      .list(entity.projectId, 'resource')
+      .find(
+        (resource) =>
+          resource.entityId === entity.id &&
+          resource.role === 'entity_introduction'
+      )
+    if (current) return current
+    const introduction = this.store.create(entity.projectId, 'resource', {
+      name: '实体介绍',
+      entityId: entity.id,
+      role: 'entity_introduction',
+      type: 'text',
+      text: entity.description || '',
+      description: '',
+      status: 'available'
+    })
+    this.relation(entity.projectId, entity.id, introduction.id, 'owns')
+    return introduction
   }
   open(projectId, body) {
     this.store.project(projectId)
@@ -94,6 +119,7 @@ export class Workflows {
       timeZone: 'Asia/Shanghai'
     }).format(new Date())
     const target = targetId === projectId ? null : this.store.get(targetId)
+    if (target?.kind === 'entity') this.ensureEntityIntroduction(target)
     const scopedSessions = this.store
       .list(projectId, 'workflow_session')
       .filter(
@@ -256,9 +282,15 @@ export class Workflows {
         role: o.role,
         type: o.type,
         assetId: o.assetId,
+        sourceResourceIds: o.sourceResourceIds,
+        workflowRunId: o.workflowRunId,
+        entityId: o.entityId,
         status: o.status,
         description: o.description,
-        text: typeof o.text === 'string' ? o.text.slice(0, 2000) : undefined
+        text:
+          typeof o.text === 'string'
+            ? o.text.slice(0, o.kind === 'resource' ? 12000 : 2000)
+            : undefined
       })),
       grants: all
         .filter((o) => o.kind === 'workflow_grant' && o.sessionId === id)
@@ -549,7 +581,8 @@ export class Workflows {
   confirmCandidate(proposalId, body) {
     const result = adopt(this.store, proposalId, body)
     const p = this.store.get(proposalId)
-    for (const entity of result.adopted.filter((o) => o.kind === 'entity'))
+    for (const entity of result.adopted.filter((o) => o.kind === 'entity')) {
+      this.ensureEntityIntroduction(entity)
       for (const c of this.store.list(p.projectId, 'chapter'))
         if (
           (entity.sources || []).some(
@@ -558,6 +591,7 @@ export class Workflows {
           )
         )
           this.relation(p.projectId, c.id, entity.id, 'mentions')
+    }
     if (p.workflowRunId) {
       const run = this.store.get(p.workflowRunId)
       this.store.update(run.id, run.revision, {
@@ -631,12 +665,19 @@ export class Workflows {
           body.text.length <= 12000),
       'reference content required'
     )
+    requireThat(
+      body.description === undefined ||
+        (typeof body.description === 'string' &&
+          body.description.length <= 12000),
+      'reference description too long'
+    )
     const resource = this.store.create(s.projectId, 'resource', {
       name: body.name || '参考元素',
       entityId: s.targetId,
       role: 'reference',
       type: body.type,
       text: body.text || '',
+      description: body.description || '',
       assetId: asset?.id || null,
       sources: body.sources || [],
       sourceUrl: body.sourceUrl || null,
@@ -644,6 +685,196 @@ export class Workflows {
     })
     this.relation(s.projectId, s.targetId, resource.id, 'owns')
     return resource
+  }
+  cancelPendingImageRuns(projectId, entityId, resourceId = null) {
+    for (const run of this.store
+      .list(projectId, 'workflow_run')
+      .filter(
+        (item) =>
+          item.targetId === entityId &&
+          item.status === 'awaiting_input_confirmation' &&
+          (!resourceId || item.inputs?.some((input) => input.id === resourceId))
+      )) {
+      this.store.update(run.id, run.revision, {
+        status: 'cancelled',
+        cancellationReason: 'source_resource_changed'
+      })
+      const promptId = run.parameters?.promptResourceId
+      const prompt = promptId && this.store.get(promptId)
+      if (prompt && prompt.status !== 'needs_refresh')
+        this.store.update(prompt.id, prompt.revision, {
+          status: 'needs_refresh'
+        })
+    }
+  }
+  setPromptResourceStatus(run, status) {
+    const promptId = run?.parameters?.promptResourceId
+    const prompt = promptId && this.store.get(promptId)
+    if (prompt && prompt.status !== status)
+      return this.store.update(prompt.id, prompt.revision, { status })
+    return prompt || null
+  }
+  updateEntityProfileData(entityId, body) {
+    const entity = this.store.get(entityId)
+    requireThat(entity.kind === 'entity', 'Entity required')
+    requireThat(
+      entity.revision === body.expectedRevision,
+      'entity revision conflict',
+      409
+    )
+    const fields = {}
+    for (const key of ['name', 'description'])
+      if (body.fields?.[key] !== undefined) fields[key] = body.fields[key]
+    requireThat(Object.keys(fields).length > 0, 'entity fields required')
+    if (fields.name !== undefined)
+      requireThat(String(fields.name).trim().length > 0, 'entity name required')
+    if (fields.description !== undefined)
+      requireThat(
+        String(fields.description).length <= 12000,
+        'entity introduction too long'
+      )
+    const introduction = this.ensureEntityIntroduction(entity)
+    this.cancelPendingImageRuns(entity.projectId, entity.id, introduction.id)
+    const updated = this.store.update(entity.id, entity.revision, fields)
+    const currentIntroduction = this.store.get(introduction.id)
+    this.store.update(currentIntroduction.id, currentIntroduction.revision, {
+      text: fields.description ?? currentIntroduction.text ?? ''
+    })
+    for (const grant of this.store
+      .list(entity.projectId, 'workflow_grant')
+      .filter(
+        (item) =>
+          item.targetId === entity.id &&
+          item.status === 'authorized' &&
+          item.entityRevision === entity.revision
+      ))
+      this.store.update(grant.id, grant.revision, {
+        entityRevision: updated.revision
+      })
+    return updated
+  }
+  updateEntityResource(projectId, entityId, body) {
+    const entity = this.store.sameProject(entityId, projectId, 'entity')
+    const resource = this.store.sameProject(
+      body.resourceId,
+      projectId,
+      'resource'
+    )
+    requireThat(
+      resource.entityId === entity.id,
+      'resource belongs to a different entity',
+      403
+    )
+    requireThat(
+      resource.revision === body.expectedRevision,
+      'resource revision conflict',
+      409
+    )
+    requireThat(
+      [
+        'reference',
+        'entity_introduction',
+        'concept_prompt',
+        'appearance_prompt',
+        'threeview_prompt'
+      ].includes(resource.role),
+      'this entity resource cannot be edited here',
+      403
+    )
+    const fields = {}
+    for (const key of ['name', 'description', 'text'])
+      if (body.fields?.[key] !== undefined) fields[key] = body.fields[key]
+    requireThat(Object.keys(fields).length > 0, 'resource fields required')
+    if (fields.name !== undefined)
+      requireThat(
+        String(fields.name).trim().length > 0 &&
+          String(fields.name).length <= 200,
+        'resource name required (max 200 chars)'
+      )
+    if (fields.description !== undefined)
+      requireThat(
+        String(fields.description).length <= 12000,
+        'resource description too long'
+      )
+    if (fields.text !== undefined)
+      requireThat(
+        String(fields.text).trim().length > 0 &&
+          String(fields.text).length <= 12000,
+        'resource text required (max 12000 chars)'
+      )
+    const updated = this.store.update(resource.id, resource.revision, fields)
+    if (resource.role === 'entity_introduction') {
+      this.cancelPendingImageRuns(projectId, entity.id, resource.id)
+      const currentEntity = this.store.get(entity.id)
+      const updatedEntity = this.store.update(
+        entity.id,
+        currentEntity.revision,
+        {
+          description: fields.text ?? currentEntity.description ?? ''
+        }
+      )
+      for (const grant of this.store
+        .list(projectId, 'workflow_grant')
+        .filter(
+          (item) =>
+            item.targetId === entity.id &&
+            item.status === 'authorized' &&
+            item.entityRevision === entity.revision
+        ))
+        this.store.update(grant.id, grant.revision, {
+          entityRevision: updatedEntity.revision
+        })
+      return updated
+    }
+    if (resource.role === 'reference') {
+      this.cancelPendingImageRuns(projectId, entity.id, resource.id)
+      return updated
+    }
+    for (const run of this.store
+      .list(projectId, 'workflow_run')
+      .filter(
+        (item) =>
+          item.parameters?.promptResourceId === resource.id &&
+          item.status === 'awaiting_input_confirmation'
+      )) {
+      const prompt = String(updated.text || '').trim()
+      requireThat(prompt.length > 0, 'prompt cannot be empty')
+      this.store.update(run.id, run.revision, {
+        parameters: {
+          ...run.parameters,
+          prompt,
+          promptHash: hash(prompt),
+          promptResourceRevision: updated.revision
+        },
+        inputs: run.inputs.map((input) =>
+          input.id === updated.id ? ref(updated) : input
+        )
+      })
+    }
+    return updated
+  }
+  updateEntityResourceForSession(sessionId, body) {
+    const session = this.session(sessionId)
+    requireThat(
+      session.workflowId === 'CreateEntity',
+      'use entity creation Workflow',
+      403
+    )
+    return this.updateEntityResource(session.projectId, session.targetId, body)
+  }
+  updateEntityProfile(sessionId, body) {
+    const session = this.session(sessionId)
+    requireThat(
+      session.workflowId === 'CreateEntity',
+      'use entity creation Workflow',
+      403
+    )
+    const entity = this.store.sameProject(
+      session.targetId,
+      session.projectId,
+      'entity'
+    )
+    return this.updateEntityProfileData(entity.id, body)
   }
   authorize(sessionId, body) {
     const s = this.session(sessionId)
@@ -826,9 +1057,45 @@ export class Workflows {
       'reference resource not found',
       409
     )
+    const introduction =
+      stage === 'threeview' ? null : this.ensureEntityIntroduction(entity)
+    const promptNode = this.store.create(s.projectId, 'resource', {
+      name:
+        stage === 'threeview'
+          ? '三视图提示词'
+          : stage === 'appearance'
+            ? '形象调整提示词'
+            : 'Qwen Image 2.1 概念图提示词',
+      entityId: entity.id,
+      role:
+        stage === 'threeview'
+          ? 'threeview_prompt'
+          : stage === 'appearance'
+            ? 'appearance_prompt'
+            : 'concept_prompt',
+      type: 'text',
+      text: prompt,
+      description: '',
+      sourceResourceIds: [
+        ...(introduction ? [introduction.id] : []),
+        ...referenceResources.map((resource) => resource.id)
+      ],
+      status: 'awaiting_input_confirmation'
+    })
+    if (introduction)
+      this.relation(
+        s.projectId,
+        introduction.id,
+        promptNode.id,
+        'informs_prompt'
+      )
+    for (const resource of referenceResources)
+      this.relation(s.projectId, resource.id, promptNode.id, 'informs_prompt')
     const inputs = [
       ref(entity),
-      ...referenceResources.map((resource) => ref(resource))
+      ...(introduction ? [ref(introduction)] : []),
+      ...referenceResources.map((resource) => ref(resource)),
+      ref(promptNode)
     ]
     for (const previous of this.store
       .list(s.projectId, 'workflow_run')
@@ -837,11 +1104,13 @@ export class Workflows {
           run.sessionId === s.id &&
           run.stage === stage &&
           run.status === 'awaiting_input_confirmation'
-      ))
+      )) {
       this.store.update(previous.id, previous.revision, {
         status: 'cancelled',
         cancellationReason: 'superseded_by_new_configuration'
       })
+      this.setPromptResourceStatus(previous, 'superseded')
+    }
     const business = this.store.create(s.projectId, 'workflow_run', {
       name:
         stage === 'concept'
@@ -860,6 +1129,10 @@ export class Workflows {
       inputs,
       parameters: {
         prompt,
+        promptResourceId: promptNode.id,
+        promptResourceRevision: promptNode.revision,
+        promptHash: hash(prompt),
+        sourceResourceIds: promptNode.sourceResourceIds,
         count,
         seed: body.seed ?? 42,
         steps: body.steps ?? 25,
@@ -871,6 +1144,21 @@ export class Workflows {
       childRunIds: [],
       executionRelations: [],
       createdAt: new Date().toISOString()
+    })
+    const attachedPrompt = this.store.update(
+      promptNode.id,
+      promptNode.revision,
+      { workflowRunId: business.id }
+    )
+    const currentBusiness = this.store.get(business.id)
+    this.store.update(currentBusiness.id, currentBusiness.revision, {
+      inputs: currentBusiness.inputs.map((input) =>
+        input.id === attachedPrompt.id ? ref(attachedPrompt) : input
+      ),
+      parameters: {
+        ...currentBusiness.parameters,
+        promptResourceRevision: attachedPrompt.revision
+      }
     })
     return this.store.get(business.id)
   }
@@ -901,6 +1189,19 @@ export class Workflows {
       'entity changed after configuration was prepared; ask Agent to refresh it',
       409
     )
+    const promptResource = this.store.sameProject(
+      parameters.promptResourceId,
+      s.projectId,
+      'resource'
+    )
+    requireThat(
+      promptResource.entityId === entity.id &&
+        promptResource.revision === parameters.promptResourceRevision &&
+        promptResource.text === parameters.prompt &&
+        hash(promptResource.text) === parameters.promptHash,
+      'prompt node changed after configuration review; ask Agent to refresh it',
+      409
+    )
     const references = parameters.referenceAssetIds.map((id, i) => {
       const asset = this.store.sameProject(id, s.projectId, 'asset')
       requireThat(
@@ -914,10 +1215,22 @@ export class Workflows {
         image: `sean_entity_canvas/${asset.hash}.png`
       }
     })
+    const submittedPrompt = this.store.update(
+      promptResource.id,
+      promptResource.revision,
+      { status: 'submitted' }
+    )
     const running = this.store.update(business.id, business.revision, {
       status: 'running',
       approvedAt: new Date().toISOString(),
-      approvedBy: body.actor || 'human'
+      approvedBy: body.actor || 'human',
+      parameters: {
+        ...parameters,
+        promptResourceRevision: submittedPrompt.revision
+      },
+      inputs: business.inputs.map((input) =>
+        input.id === submittedPrompt.id ? ref(submittedPrompt) : input
+      )
     })
     const children = []
     for (let i = 0; i < parameters.count; i++) {
@@ -1258,6 +1571,7 @@ export class Workflows {
       selectedAssetId: asset.id,
       resultSelectionId: selection.id
     })
+    this.setPromptResourceStatus(parent, 'result_confirmed')
     if (parent.sessionId) {
       const session = this.session(parent.sessionId)
       this.store.update(session.id, session.revision, { status: 'ready' })
@@ -1281,6 +1595,7 @@ export class Workflows {
       'appearance conflict',
       409
     )
+    this.cancelPendingImageRuns(entity.projectId, entityId)
     for (const resource of this.store
       .list(entity.projectId, 'resource')
       .filter((r) => r.assetId === asset.id && r.entityId === entityId))
@@ -1334,6 +1649,7 @@ export class Workflows {
         status: 'succeeded',
         selectedAssetId: asset.id
       })
+      this.setPromptResourceStatus(parent, 'result_confirmed')
       // Already-scoped downstream work is deterministic; no fake user/model message needed.
       const grant = this.store
         .list(entity.projectId, 'workflow_grant')
@@ -1431,6 +1747,10 @@ export class Workflows {
             }))
           ]
         })
+        if (status === 'waiting_confirmation')
+          this.setPromptResourceStatus(run, 'awaiting_result_confirmation')
+        else if (status === 'failed' || status === 'submission_unknown')
+          this.setPromptResourceStatus(run, status)
         const s = this.session(run.sessionId)
         this.store.update(s.id, s.revision, {
           status:
@@ -1464,6 +1784,10 @@ export class Workflows {
         return this.proposeEntities(sessionId, body)
       if (operation === 'add_reference')
         return this.addReference(sessionId, body)
+      if (operation === 'update_resource')
+        return this.updateEntityResourceForSession(sessionId, body)
+      if (operation === 'update_entity_profile')
+        return this.updateEntityProfile(sessionId, body)
       if (operation === 'generate_concepts')
         return this.generate(sessionId, body)
       if (operation === 'prepare_appearance_adjustment')

@@ -203,7 +203,7 @@
               role="menuitem"
               @click="launchContextWorkflow('CreateEntity')"
             >
-              继续制作
+              新建/继续处理此节点的 Agent
             </button>
           </template>
           <template v-else-if="contextNode?.kind === 'workflow_run'">
@@ -464,13 +464,20 @@
             v-model="referenceText"
             placeholder="参考描述、风格或外观要求"
           /><button @click="addTextReference">保存参考描述</button
-          ><label class="upload"
+          ><textarea
+            v-model="referenceDescription"
+            placeholder="为下一张图片写明用途，例如：参考发型、服装或构图"
+          />
+          <label class="upload"
             >上传参考 PNG<input
               type="file"
               accept="image/png"
               @change="uploadReference"
           /></label>
           <p>正式形象：{{ selected.appearanceAssetId || '尚未确认' }}</p>
+          <button @click="selectEntityIntroduction(selected)">
+            查看实体介绍节点 ↗
+          </button>
         </template>
         <template v-if="selected.kind === 'proposal_item'">
           <p>
@@ -532,7 +539,38 @@
             class="resource-image"
           />
           <pre v-else>{{ selected.text }}</pre>
-          <p>{{ selected.role }} · {{ selected.status }}</p>
+          <p>
+            {{ kindName(selected.role) }} · {{ statusName(selected.status) }}
+          </p>
+          <template
+            v-if="
+              [
+                'reference',
+                'entity_introduction',
+                'concept_prompt',
+                'appearance_prompt',
+                'threeview_prompt'
+              ].includes(selected.role)
+            "
+          >
+            <label>节点名称<input v-model="resourceName" /></label>
+            <label v-if="selected.role === 'reference'"
+              >这张图/素材参考什么<textarea v-model="resourceDescription" />
+            </label>
+            <label
+              v-if="selected.role === 'reference' && selected.type === 'text'"
+              >参考内容<textarea v-model="resourceText" />
+            </label>
+            <label v-if="selected.role === 'entity_introduction'"
+              >实体介绍<textarea v-model="resourceText" />
+            </label>
+            <label v-if="selected.role.endsWith('_prompt')"
+              >生成提示词<textarea v-model="resourceText" />
+            </label>
+            <button class="primary" @click="saveResourceDetails(selected)">
+              保存并更新画布节点
+            </button>
+          </template>
           <button
             v-if="['concept', 'appearance_candidate'].includes(selected.role)"
             class="primary"
@@ -754,8 +792,12 @@ const importing = ref(false),
   novelName = ref(''),
   novelText = ref(''),
   referenceText = ref(''),
+  referenceDescription = ref(''),
   entityName = ref(''),
-  entityDescription = ref('')
+  entityDescription = ref(''),
+  resourceName = ref(''),
+  resourceDescription = ref(''),
+  resourceText = ref('')
 const canvasHost = ref<HTMLElement>(),
   canvasElement = ref<HTMLCanvasElement>(),
   native = ref<InstanceType<typeof NativeWorkflow>>(),
@@ -901,6 +943,10 @@ watch(selected, (object) => {
   entityName.value = object?.kind === 'entity' ? object.name || '' : ''
   entityDescription.value =
     object?.kind === 'entity' ? object.description || '' : ''
+  resourceName.value = object?.kind === 'resource' ? object.name || '' : ''
+  resourceDescription.value =
+    object?.kind === 'resource' ? object.description || '' : ''
+  resourceText.value = object?.kind === 'resource' ? object.text || '' : ''
 })
 const agentGraphNodes = computed<Obj[]>(() => {
   if (!project.value) return []
@@ -1124,6 +1170,8 @@ function runOutputSummary(run: Obj, outputType: string) {
         : 0
     return `候选：待确认 ${pending} · 已确认 ${adopted} · 已取消 ${rejected}`
   }
+  if (run.status === 'awaiting_input_confirmation')
+    return `待确认提示词与引用 · ${run.parameters?.count || 1} 个候选`
   const outputCount = (run.outputs || []).reduce(
     (count: number, id: string) => {
       const proposal = objects.value.find(
@@ -1138,7 +1186,11 @@ function runOutputSummary(run: Obj, outputType: string) {
       ? '人物声音样音'
       : run.stage === 'threeview'
         ? '三视图资源'
-        : outputType
+        : run.stage === 'appearance'
+          ? '形象调整候选'
+          : run.stage === 'concept'
+            ? '概念图候选'
+            : outputType
   return `输出 ${stageType} ${outputCount} 项`
 }
 const activeRun = (run: Obj) =>
@@ -1159,6 +1211,23 @@ const names: Record<string, string> = {
   entity: '实体',
   source: '小说原文',
   resource: '资源',
+  reference: '参考图/素材',
+  entity_introduction: '实体介绍',
+  concept_prompt: 'Qwen Image 2.1 概念提示词',
+  appearance_prompt: '形象调整提示词',
+  threeview_prompt: '三视图提示词',
+  concept: '概念候选图',
+  appearance_candidate: '形象候选图',
+  appearance_current: '正式形象',
+  threeview: '三视图候选',
+  threeview_current: '已确认三视图',
+  available: '可用',
+  draft: '提示词草稿',
+  submitted: '已提交生成',
+  awaiting_result_confirmation: '待确认生成结果',
+  needs_refresh: '来源已变化，需重新生成配置',
+  result_confirmed: '结果已确认',
+  candidate: '待选择',
   proposal: '待确认候选',
   workflow_run: 'Workflow Run',
   character: '人物',
@@ -1180,6 +1249,7 @@ const names: Record<string, string> = {
   succeeded: '已完成',
   failed: '失败',
   cancelled: '已取消',
+  superseded: '已被新配置替代',
   submission_unknown: '提交待核对'
 }
 const kindName = (kind: string) => names[kind] || kind
@@ -1469,11 +1539,7 @@ async function launchContextWorkflow(workflowId: string) {
   contextMenu.value = null
   if (!node) return
   const definition = definitions.value.find((item) => item.id === workflowId)
-  const contextId = node.kind.startsWith('workflow_')
-    ? undefined
-    : node.kind === 'resource'
-      ? node.entityId || node.id
-      : node.id
+  const contextId = node.kind.startsWith('workflow_') ? undefined : node.id
   const entityId =
     node.kind === 'entity'
       ? node.id
@@ -2063,6 +2129,31 @@ async function saveEntityDetails() {
     showError(e)
   }
 }
+async function saveResourceDetails(resource: Obj) {
+  const fields: Record<string, string> = { name: resourceName.value.trim() }
+  if (resource.role === 'reference') {
+    fields.description = resourceDescription.value.trim()
+    if (resource.type === 'text') fields.text = resourceText.value
+  } else fields.text = resourceText.value
+  try {
+    const updated = await studioApi(`/resources/${resource.id}`, {
+      expectedRevision: resource.revision,
+      fields,
+      requestId: requestId()
+    })
+    await refresh()
+    selected.value = objectById(updated.id) || null
+  } catch (e) {
+    showError(e)
+  }
+}
+function selectEntityIntroduction(entity: Obj) {
+  const introduction = resources.value.find(
+    (resource) =>
+      resource.entityId === entity.id && resource.role === 'entity_introduction'
+  )
+  if (introduction) select(introduction)
+}
 async function addTextReference() {
   const e = selected.value!
   try {
@@ -2090,9 +2181,11 @@ async function uploadReference(event: Event) {
     for (const byte of bytes) binary += String.fromCharCode(byte)
     await studioApi(`/entities/${selected.value!.id}/reference-image`, {
       name: file.name,
+      description: referenceDescription.value.trim(),
       data: btoa(binary),
       requestId: requestId()
     })
+    referenceDescription.value = ''
     await refresh()
   } catch (e) {
     showError(e)
@@ -2272,7 +2365,7 @@ async function removeWorkflowConversation(node: Obj) {
 async function enterResourceSession(resource: Obj) {
   const run = objectById(resource.workflowRunId)
   if (run) await openRunSession(run)
-  else await enterWorkflow('CreateEntity', resource.entityId)
+  else await enterWorkflow('CreateEntity', resource.entityId, resource.id)
 }
 async function viewExecution(run: Obj) {
   executionSnapshot.value = objectById(run.childRunIds[0]) || null

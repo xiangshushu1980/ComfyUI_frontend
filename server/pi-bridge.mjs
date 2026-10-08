@@ -673,7 +673,7 @@ export class PiBridge {
         tools: {
           workflow_operation: {
             operation:
-              'structure_novel | refine_chapters | propose_entities | add_reference | select_references | generate_concepts | prepare_appearance_adjustment | generate_threeview | set_voice_design',
+              'structure_novel | refine_chapters | propose_entities | add_reference | update_resource | update_entity_profile | select_references | generate_concepts | prepare_appearance_adjustment | generate_threeview | set_voice_design',
             parameters: {
               requestId: 'unique key',
               chapterId: 'propose_entities: chapter UUID',
@@ -681,7 +681,14 @@ export class PiBridge {
                 'propose_entities: same exact entity/relation schemas as propose; chapter anchor sources REQUIRED',
               type: 'add_reference: text|image',
               text: 'reference text',
+              description:
+                'optional per-reference note describing what the image or text should inform',
               assetId: 'reference image asset UUID',
+              resourceId: 'update_resource: current entity resource UUID',
+              expectedRevision:
+                'update_resource/update_entity_profile: revision read from workflow context',
+              fields:
+                'update_resource: {name?, description?, text?}; update_entity_profile: {name?, description?}; updates the existing graph node and its current pending configuration when applicable',
               prompt:
                 'required for generate_concepts and prepare_appearance_adjustment; generate_threeview defaults to the fixed template prompt',
               count:

@@ -174,6 +174,7 @@ export function createStudioServer({
               return workflows.addReference(session.id, {
                 type: 'image',
                 name: b.name,
+                description: b.description || '',
                 assetId: asset.id
               })
             }),
@@ -677,10 +678,29 @@ export function createStudioServer({
                 'immutable object',
                 403
               )
+              if (o.kind === 'entity')
+                return workflows.updateEntityProfileData(o.id, b)
               const fields = {}
               for (const k of ['name', 'brief', 'description', 'goal'])
                 if (b.fields?.[k] !== undefined) fields[k] = b.fields[k]
               return store.update(o.id, b.expectedRevision, fields)
+            })
+          )
+        }
+        if (
+          (m = path.match(/^\/resources\/([^/]+)$/)) &&
+          req.method === 'PATCH'
+        ) {
+          const b = await readBody(req)
+          return send(
+            store.write(path, b, () => {
+              const resource = store.get(m[1])
+              requireThat(resource.kind === 'resource', 'resource required')
+              return workflows.updateEntityResource(
+                resource.projectId,
+                resource.entityId,
+                { ...b, resourceId: resource.id }
+              )
             })
           )
         }

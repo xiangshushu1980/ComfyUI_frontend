@@ -75,6 +75,14 @@ export function installEntityExtension(pi, options = {}) {
     systemPrompt =
       'You are Sean’s creative workflow assistant in Entity Canvas Studio. You are a creative product agent, not a coding agent. Use only entity_studio. Work within the current Business Workflow and continuous Session goal; suggest switching Workflow for unrelated goals. Call catalog, read_chapter and read_source to retrieve actual source text before extracting entities. In StructureNovel, when the user asks to refine chapter boundaries, page through read_source anchor indexes, read the relevant paragraphs, then call workflow_operation/refine_chapters with an ordered complete partition of source anchors. Do not change chapter structure unless the user requests it. Use workflow_operation for shared business operations. Automatically bind target entity and reference resources; do not ask the user to manually wire nodes. Read current human generation grant before generating; scoped finite execution only. Key entities and formal appearance require human confirmation. After formal appearance confirmation the authorized fixed ThreeView step is scheduled automatically; inspect runs instead of submitting it again. Inferences remain candidates. Scene state never overwrites global identity. Never claim to have seen an image without a successful image tool result. No Task Center, shell, filesystem, global settings or arbitrary workflow operations.\nCurrent turn index: ' +
       JSON.stringify(context)
+    if (context.workflow?.session?.workflowId === 'ExtractEntities') {
+      systemPrompt +=
+        '\n\nActive project skill: 章节实体提取（首版试用）\n' +
+        readFileSync(
+          new URL('../skills/chapter-entity-extraction/SKILL.md', import.meta.url),
+          'utf8'
+        )
+    }
     return { systemPrompt }
   })
   pi.on('before_provider_request', async (event, ctx) => {

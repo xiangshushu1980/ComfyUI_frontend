@@ -67,9 +67,16 @@ export class PiBridge {
     const cwd = binding?.cwd || projectWorkspace
     const sharedProjectWorkspace = cwd === projectWorkspace
     await mkdir(join(cwd, '.pi/extensions'), { recursive: true })
+    await mkdir(join(cwd, '.pi/skills/chapter-entity-extraction'), {
+      recursive: true
+    })
     await copyFile(
       new URL('../pi/entity-extension.mjs', import.meta.url),
       join(cwd, '.pi/extensions/entity-studio.js')
+    )
+    await copyFile(
+      new URL('../pi/skills/chapter-entity-extraction/SKILL.md', import.meta.url),
+      join(cwd, '.pi/skills/chapter-entity-extraction/SKILL.md')
     )
     let capability =
       binding?.capability ||

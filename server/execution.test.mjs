@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Store, hash } from './store.mjs'
 import { Execution } from './execution.mjs'
+import { createMockMedia } from './mock-media.mjs'
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'sean-action-')),
     s = new Store(join(dir, 'test.sqlite'))
@@ -116,4 +117,22 @@ test('new input revokes previous unconsumed generation authorization', () => {
   assert.throws(() => execution.consume(action.id), /revoked/)
   assert.equal(submits(), 0)
   s.close()
+})
+
+test('SaveImage history images are durably collected without real service access', async (t) => {
+  const { s, execution, i } = fixture()
+  try {
+    const action = s.transaction(() => execution.authorize(i.id, { inputRevision: i.revision, inputHash: i.inputHash, authorizedOnce: true }))
+    const run = execution.consume(action.id)
+    const media = createMockMedia('concept')
+    t.mock.method(globalThis, 'fetch', async (url) => {
+      assert.match(String(url), /^http:\/\/unused\/view\?/)
+      return new Response(media.bytes)
+    })
+    await execution.collect(run, { outputs: { '9': { images: [{ filename: 'fixture.png', subfolder: 'fixture', type: 'output' }] } } })
+    assert.equal(s.get(run.id).status, 'succeeded')
+    const asset = s.get(s.get(run.id).outputs[0])
+    assert.equal(asset.hash, hash(media.bytes))
+    assert.equal(asset.mime, 'image/png')
+  } finally { s.close() }
 })

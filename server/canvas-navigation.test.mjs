@@ -16,8 +16,8 @@ const objects = [
 const ids = (scope) => projectScope(objects, scope).map((o) => o.id)
 test('drilling retains current node and hides ancestors and other branches', () => {
   assert.deepEqual(objectPath('section', objectHierarchy(objects)), ['novel', 'chapter', 'section'])
-  assert.deepEqual(ids('chapter'), ['chapter', 'section', 'scene', 'entity', 'image'])
-  assert.deepEqual(ids('section'), ['section', 'scene', 'entity', 'image'])
+  assert.deepEqual(ids('chapter'), ['chapter', 'section', 'scene', 'entity'])
+  assert.deepEqual(ids('section'), ['section', 'scene', 'entity'])
   assert.deepEqual(ids('scene'), ['scene'])
   assert.deepEqual(ids('missing'), [])
 })
@@ -49,7 +49,7 @@ test('rapid drill hit detection uses current drawn geometry and includes titles'
 })
 test('scene drill follows shared entity references without showing scene or chapter parents', () => {
   const shared = [...objects, { id: 'reference-edge', kind: 'data_relation', fromId: 'scene', toId: 'entity', type: 'references' }]
-  assert.deepEqual(projectScope(shared, 'scene').map((o) => o.id), ['scene', 'entity', 'image'])
+  assert.deepEqual(projectScope(shared, 'scene').map((o) => o.id), ['scene', 'entity'])
   assert.deepEqual(projectScope(shared, 'entity').map((o) => o.id), ['entity', 'image', 'reference'])
 })
 

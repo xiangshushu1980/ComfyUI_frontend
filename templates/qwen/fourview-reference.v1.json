@@ -1,0 +1,13 @@
+{
+  "owner": "Sean",
+  "id": "qwen-fourview-face-front-back-side-reference",
+  "version": 1,
+  "status": "reference_only_not_active_workflow",
+  "purpose": "Prior Qwen Image 2.1 face portrait plus front/back/side character sheet. Not the active three-view workflow.",
+  "prompt": "Create one clean 3:2 landscape character reference sheet using the confirmed appearance as the only visual reference. Use a warm off-white background, generous spacing, soft even neutral studio lighting, and match the reference's rendering style, line work, texture, and shading. Divide the sheet into two clear regions without borders: a left column occupying about one fifth of the canvas with exactly one large straight-on head-and-shoulders portrait and neutral expression; and a right region occupying the remaining width with exactly three full-height figures, identically scaled, ordered left to right: straight-on front view, straight-on back view, strict clean side profile. Keep each body in the same neutral relaxed pose and show the full head, hands, and feet. The portrait and all three body views must depict the same subject. Preserve the exact identity, facial features, hair, clothing, materials, colors, asymmetry, and accessories from the reference. Do not add, remove, redesign, beautify, age, or infer details from role or lore. No extra characters, poses, views, props, text, labels, borders, watermark, anatomy distortions, or style drift.",
+  "source": {
+    "catalog": "/home/sean/projects/comfy-ops/reference-workspace/catalog/qwen-multiview.v3-simple-face.json",
+    "localExperiment": "/home/sean/projects/comfy-ops/experiments/qwen_image_2_1_civitai_character_sheet_20261002/",
+    "status": "reviewed prompt reference; Studio runtime support not implemented"
+  }
+}

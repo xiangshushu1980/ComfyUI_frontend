@@ -61,3 +61,38 @@ test('native shared writes denied, private settings persist, public snapshots re
     await new Promise((r) => server.close(r))
   }
 })
+
+test('project SSE resumes from Last-Event-ID instead of replaying its query cursor', async () => {
+  const { server, store } = createStudioServer({
+    dataDir: mkdtempSync(join(tmpdir(), 'sean-sse-'))
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const root = 'http://127.0.0.1:' + server.address().port
+  try {
+    const project = store.transaction(() => store.createProject({ name: 'SSE test' }))
+    store.transaction(() => store.event(project.id, 'old.event', { marker: 'old' }))
+    const queryCursor = store.events(project.id).at(-1).seq
+    store.transaction(() => store.event(project.id, 'replayed.event', { marker: 'replayed' }))
+    const reconnectCursor = store.events(project.id).at(-1).seq
+    store.transaction(() => store.event(project.id, 'new.event', { marker: 'new' }))
+
+    const response = await fetch(
+      `${root}/studio-api/v1/projects/${project.id}/events?after=${queryCursor}`,
+      {
+        headers: {
+          accept: 'text/event-stream',
+          'last-event-id': String(reconnectCursor)
+        }
+      }
+    )
+    assert.equal(response.status, 200)
+    const reader = response.body.getReader()
+    const { value } = await reader.read()
+    await reader.cancel()
+    const firstChunk = new TextDecoder().decode(value)
+    assert.match(firstChunk, /new\.event/)
+    assert.doesNotMatch(firstChunk, /replayed\.event/)
+  } finally {
+    await new Promise((r) => server.close(r))
+  }
+})

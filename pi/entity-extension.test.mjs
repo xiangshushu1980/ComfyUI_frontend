@@ -1,6 +1,9 @@
 // Owner: Sean.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { cpSync, mkdtempSync, mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { installEntityExtension } from './entity-extension.mjs'
 test('native PiWeb input obtains bound receipt; foreign and nested tools blocked', async () => {
   const hooks = new Map(),
@@ -11,7 +14,10 @@ test('native PiWeb input obtains bound receipt; foreign and nested tools blocked
     registerTool: (t) => tools.push(t),
     setActiveTools: (t) => active.push(t)
   }
-  const ctx = { sessionManager: { getSessionId: () => 'native-real' } }
+  const cwd = mkdtempSync(join(tmpdir(), 'sean-extension-skills-'))
+  mkdirSync(join(cwd, '.pi'), { recursive: true })
+  cpSync(new URL('./skills/', import.meta.url), join(cwd, '.pi/skills'), { recursive: true })
+  const ctx = { cwd, sessionManager: { getSessionId: () => 'native-real' } }
   installEntityExtension(pi, {
     config: { apiUrl: 'http://test', capability: 'secret', discussionId: 'd' },
     fetch: async (url, r) => {
@@ -20,7 +26,7 @@ test('native PiWeb input obtains bound receipt; foreign and nested tools blocked
       return Response.json(
         url.endsWith('direct-input') ? { id: 'direct-turn', receipt: 'b'.repeat(64) } : url.endsWith('receipt')
           ? { id: b.turnId, receipt: b.receipt }
-          : { ok: true }
+          : { workflow: { session: { workflowId: 'CreateEntity' } } }
       )
     }
   })
@@ -47,6 +53,8 @@ test('native PiWeb input obtains bound receipt; foreign and nested tools blocked
   )
   const prompt = await hooks.get('before_agent_start')({}, ctx)
   assert.match(prompt.systemPrompt, /not a coding agent/)
+  assert.match(prompt.systemPrompt, /Qwen Image 2.1 prompting/)
+  assert.match(prompt.systemPrompt, /must not submit generation/)
   const payload = await hooks.get('before_provider_request')({ payload: {
     tools: [{ name: 'bash' }, { function: { name: 'entity_studio' } }],
     messages: [{ role: 'system', content: 'coding host identity' },
@@ -56,7 +64,7 @@ test('native PiWeb input obtains bound receipt; foreign and nested tools blocked
   assert.equal(payload.tools.length, 1)
   assert.equal(payload.tools[0].function.name, 'entity_studio')
   assert.equal(payload.messages.length, 2)
-  assert.match(payload.messages[0].content, /creative product agent/)
+  assert.match(payload.messages[0].content, /creative product workflow agent/)
   assert.equal(payload.messages[1].content, 'review source')
   assert.equal(tools.length, 1)
 })

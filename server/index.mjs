@@ -143,7 +143,7 @@ export function createStudioServer({
       const path = url.pathname.replace(/^\/studio-api\/v1/, '')
       if (url.pathname.startsWith('/studio-api/v1')) {
         if (path === '/workflow-definitions' && req.method === 'GET')
-          return send(definitions)
+          return send(definitions.filter((definition) => !definition.deprecated))
         if (
           (m = path.match(/^\/entities\/([^/]+)\/reference-image$/)) &&
           req.method === 'POST'
@@ -210,6 +210,16 @@ export function createStudioServer({
           const b = await readBody(req)
           return send(
             store.write(path, b, () => workflows.authorize(m[1], b)),
+            201
+          )
+        }
+        if (
+          (m = path.match(/^\/workflow-sessions\/([^/]+)\/generate-concept$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          return send(
+            store.write(path, b, () => workflows.generateConceptFromPlan(m[1], b)),
             201
           )
         }
@@ -658,7 +668,10 @@ export function createStudioServer({
               'cache-control': 'no-cache',
               connection: 'keep-alive'
             })
-            let seq = Number(url.searchParams.get('after') || 0)
+            const eventCursor = Number(
+              req.headers['last-event-id'] ?? url.searchParams.get('after') ?? 0
+            )
+            let seq = Number.isFinite(eventCursor) && eventCursor >= 0 ? eventCursor : 0
             const emit = () => {
               for (const e of store.events(m[1], seq)) {
                 seq = e.seq
@@ -771,6 +784,30 @@ export function createStudioServer({
                 { ...b, resourceId: resource.id }
               )
             })
+          )
+        }
+        if (
+          (m = path.match(/^\/resources\/([^/]+)\/remove$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          const resource = store.get(m[1])
+          return send(
+            store.write(path, b, () =>
+              workflows.removeEntityResource(resource.projectId, resource.id, b)
+            )
+          )
+        }
+        if (
+          (m = path.match(/^\/objects\/([^/]+)\/remove$/)) &&
+          req.method === 'POST'
+        ) {
+          const b = await readBody(req)
+          const object = store.get(m[1])
+          return send(
+            store.write(path, b, () =>
+              workflows.removeCanvasNode(object.projectId, object.id, b)
+            )
           )
         }
         if (

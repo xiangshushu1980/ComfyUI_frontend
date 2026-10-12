@@ -72,28 +72,31 @@ export function installEntityExtension(pi, options = {}) {
       { turnId: turn.id, receipt: turn.receipt, tool: 'context', args: {} },
       ctx
     )
+    const workflowId = context.workflow?.session?.workflowId
+    const activeSkills = []
+    if (workflowId) {
+      const registry = JSON.parse(
+        readFileSync(
+          join(ctx.cwd, '.pi/skills/workflow-skill-registry.json'),
+          'utf8'
+        )
+      )
+      for (const skillPath of new Set([
+        registry.common,
+        registry.workflows[workflowId],
+        ...(registry.references?.[workflowId] || [])
+      ])) {
+        if (!skillPath) continue
+        activeSkills.push(
+          readFileSync(join(ctx.cwd, '.pi/skills', skillPath), 'utf8')
+        )
+      }
+    }
     systemPrompt =
-      'You are Sean’s creative workflow assistant in Entity Canvas Studio. You are a creative product agent, not a coding agent. Use only entity_studio. Work within the current Business Workflow and continuous Session goal; suggest switching Workflow for unrelated goals. Call catalog, read_chapter and read_source to retrieve actual source text before extracting entities. In StructureNovel, when the user asks to refine chapter boundaries, page through read_source anchor indexes, read the relevant paragraphs, then call workflow_operation/refine_chapters with an ordered complete partition of source anchors. Do not change chapter structure unless the user requests it. Use workflow_operation for shared business operations. Automatically bind target entity and reference resources; do not ask the user to manually wire nodes. A CreateEntity Workflow launched from the entity node carries a bounded generation grant; do not ask for repeated generation authorization. If critical creative inputs are unclear, ask in PiWeb and wait. Formal appearance and current voice always require human choice. Persist an agreed character voice description and sample sentence with set_voice_design; Studio starts the single authorized voice Run when the three-view Run succeeds. Never clone/reference audio or create prop/scene sounds. Voice samples remain candidates until the user listens and chooses one in Studio. Inferences remain candidates. Scene state never overwrites global identity. Never claim to have seen an image without a successful image tool result. If workflow context says generationMode is mock, explain that outputs are simulated local previews and never describe them as model-generated. No Task Center, shell, filesystem, global settings or arbitrary workflow operations.\nCurrent turn index: ' +
-      JSON.stringify(context)
-    if (context.workflow?.session?.workflowId === 'ExtractEntities') {
-      systemPrompt +=
-        '\n\nActive project skill: 章节实体提取（首版试用）\n' +
-        readFileSync(
-          new URL(
-            '../skills/chapter-entity-extraction/SKILL.md',
-            import.meta.url
-          ),
-          'utf8'
-        )
-    }
-    if (context.workflow?.session?.workflowId === 'CreateEntity') {
-      systemPrompt +=
-        '\n\nActive project skill: 人物实体制作流程（首版，待闭环验证）\n' +
-        readFileSync(
-          new URL('../skills/entity-creation/SKILL.md', import.meta.url),
-          'utf8'
-        )
-    }
+      'You are Sean’s creative product workflow agent in Entity Canvas Studio, not a coding agent. Use only entity_studio and the current bound Workflow. Follow the active project skills as authoritative operating instructions, including their Startup section when a fresh session is initialized. Do not ask the user to repeat the task encoded by the Workflow goal. Treat IDs and revisions in context as private tool handles; never include them in user-facing replies or dump raw context JSON. Treat each non-empty reference resource description as a user-authored instruction for how that image relates to the entity; report it accurately and never call the note missing. Follow the active skill’s confirmation path: a focused concept conversation saves a user-confirmed plan only and the user starts its Run from the canvas, while formal appearance/result selection remains a human action. Never exceed the workflow grant. Never claim to have inspected an image without a successful image tool result. If generation mode is mock, identify outputs as simulated previews. No shell, filesystem, arbitrary code, Task Center or unrelated host operations; project visual style may only be saved through the bound Workflow operation after the user explicitly confirms it.\nCurrent Workflow context: ' +
+      JSON.stringify(context) +
+      '\n\nActive project skills:\n' +
+      activeSkills.join('\n\n---\n\n')
     return { systemPrompt }
   })
   pi.on('before_provider_request', async (event, ctx) => {
@@ -163,7 +166,7 @@ export function installEntityExtension(pi, options = {}) {
     name: 'entity_studio',
     label: '[Sean] Entity Studio',
     description:
-      'Read the current Workflow context and call catalog for shared operations. workflow_operation generates within the current finite workflow grant. Legacy submit_action requires a signed one-use action. Never adopt facts or confirm appearance.',
+      'Use nested tool names exactly as listed in catalog. The current Workflow context is already injected; to retrieve it use tool="context" (not get_context). workflow_operation generates within the current finite workflow grant. Never adopt facts or confirm appearance.',
     parameters: {
       type: 'object',
       properties: {

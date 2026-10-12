@@ -1,8 +1,8 @@
 {
   "owner": "Sean",
   "id": "qwen-threeview",
-  "version": 1,
-  "prompt": "Composition: Clean 3:2 landscape layout on a warm off-white background with generous spacing. No frames, borders, dividers, text, labels, watermarks, or logos. Soft, even neutral studio lighting across all panels. Rendering style, line weight, texture, and shading must strictly match the reference image.\nThree full-height, identically scaled figures of the reference subject arranged left to right: Front View, Clean Side Profile, and Back View. Neutral relaxed stance, head to feet visible in every figure. Soft oval floor shadows.\nConsistency & Constraints: Preserve exact identity, hair, facial features, garments, asymmetry, and accessories from the reference. Do not add, redesign, beautify, age, or extrapolate items based on lore/profession. No extra characters, shifting proportions, extra limbs, or style drift.",
+  "version": 2,
+  "prompt": "Create one clean 3:2 landscape character turnaround sheet using the confirmed appearance as the only visual reference. Use a warm off-white studio background, generous spacing, soft even neutral studio lighting, and match the reference's rendering style, line work, texture, and shading. Show exactly three separate, full-height figures of the same subject, identically scaled and aligned left to right: straight-on front view, strict clean side profile, and straight-on back view. Each figure stands in the same neutral relaxed pose; show the complete head, hands, and feet in every view. Keep all three views visually distinct and unobstructed, with only subtle soft oval contact shadows. Preserve the reference's exact identity, face, hair, clothing, materials, colors, asymmetry, and accessories in every view. Do not add, remove, redesign, beautify, age, or infer features from role or lore. No extra views, poses, characters, props, text, labels, frames, borders, watermark, anatomy distortions, or style drift.",
   "source": {
     "catalog": "/home/sean/projects/comfy-ops/reference-workspace/catalog/qwen-multiview.v3-simple.json",
     "sourceWorkflow": {
@@ -10,6 +10,6 @@
       "sha256": "27623839f0868223a7ddd35f8af69e24254dc7c0b8526555f3c8504ece4b806f",
       "mode": "V3 Simple static, local int8 adaptation, standard VAEDecode"
     },
-    "status": "reused fixed template; studio end-to-end verification pending"
+    "status": "prompt revised from the prior reviewed template; Studio end-to-end verification pending"
   }
 }

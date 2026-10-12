@@ -1,10 +1,16 @@
 // Owner: Sean. Native PiWeb bridge with durable send/create uncertainty.
 import { readFileSync } from 'node:fs'
-import { mkdir, writeFile, copyFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { mkdir, writeFile, copyFile, cp } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { requireThat, hash } from './store.mjs'
 import { propose } from './domain.mjs'
+const workflowSkillRegistry = JSON.parse(
+  readFileSync(
+    new URL('../pi/skills/workflow-skill-registry.json', import.meta.url),
+    'utf8'
+  )
+)
 export class PiBridge {
   constructor(
     store,
@@ -67,20 +73,36 @@ export class PiBridge {
     const cwd = binding?.cwd || projectWorkspace
     const sharedProjectWorkspace = cwd === projectWorkspace
     await mkdir(join(cwd, '.pi/extensions'), { recursive: true })
-    await mkdir(join(cwd, '.pi/skills/chapter-entity-extraction'), {
-      recursive: true
-    })
+    const workspaceSkills = join(cwd, '.pi/skills')
+    await mkdir(workspaceSkills, { recursive: true })
     await copyFile(
       new URL('../pi/entity-extension.mjs', import.meta.url),
       join(cwd, '.pi/extensions/entity-studio.js')
     )
     await copyFile(
-      new URL(
-        '../pi/skills/chapter-entity-extraction/SKILL.md',
-        import.meta.url
-      ),
-      join(cwd, '.pi/skills/chapter-entity-extraction/SKILL.md')
+      new URL('../pi/skills/workflow-skill-registry.json', import.meta.url),
+      join(workspaceSkills, 'workflow-skill-registry.json')
     )
+    const skillFiles = new Set([
+      workflowSkillRegistry.common,
+      ...Object.values(workflowSkillRegistry.workflows)
+    ])
+    for (const relativePath of skillFiles) {
+      requireThat(
+        typeof relativePath === 'string' &&
+          relativePath.endsWith('/SKILL.md') &&
+          !relativePath.split('/').includes('..'),
+        'invalid workflow skill registry path',
+        500
+      )
+      const destination = join(workspaceSkills, relativePath)
+      await mkdir(dirname(destination), { recursive: true })
+      await cp(
+        new URL(`../pi/skills/${dirname(relativePath)}/`, import.meta.url),
+        dirname(destination),
+        { recursive: true }
+      )
+    }
     let capability =
       binding?.capability ||
       bindings.find((b) => b.cwd === projectWorkspace)?.capability
@@ -414,7 +436,7 @@ export class PiBridge {
       } catch {
         // Session labels are best-effort; the shared workspace name stays readable.
       }
-      return this.ensureNavigable(updated)
+      return this.ensureNavigable(updated, { initializeFresh: true })
     } catch (e) {
       const current = this.store.get(b.id)
       this.store.transaction(() =>
@@ -426,15 +448,17 @@ export class PiBridge {
       throw e
     }
   }
-  async ensureNavigable(binding) {
+  async ensureNavigable(binding, { initializeFresh = false } = {}) {
     const session = await this.nativeSessionForBinding(binding)
-    if (!session) {
+    if (!session || initializeFresh) {
       // Pi Web deliberately excludes idle transient sessions. A recorded,
-      // guarded initialization turn makes the exact session navigable.
+      // guarded initialization turn makes the exact session navigable and
+      // starts a new Workflow from its project skill's Startup section.
       await this.send(binding.discussionId, {
         requestId: `initialize:${binding.sessionId}`,
-        text: '初始化当前业务 Workflow 会话：读取 context，简短说明当前目标及等待用户指示。此初始化不调用任何写操作、不生成、不采用、不确认。'
+        text: '初始化当前 Workflow 对话：优先使用已经注入的 Workflow context；只有缺少必要状态时，才通过 entity_studio 调用 tool="context" 读取（工具名是 context，不是 get_context）。执行注入的项目级 Workflow skill 中 Startup 部分，立即给出该工作流要求的开场回应或开始其获准的可审阅工作。严格遵循该 skill 的确认边界；不得绕过人工采纳、生成配置确认或结果确认。'
       })
+      if (session) return this.publicBinding(this.store.get(binding.id))
       for (let attempt = 0; attempt < 40; attempt++) {
         const next = await this.nativeSessionForBinding(binding)
         if (next) return this.publicBinding(this.store.get(binding.id))
@@ -610,6 +634,9 @@ export class PiBridge {
       return this.execution.preview(
         this.store.sameProject(args.inputId, turn.projectId, 'image_input').id
       )
+    // Older prompts may phrase this read-only operation as get_context.
+    if (body.tool === 'get_context')
+      return this.tool(capability, { ...body, tool: 'context' })
     if (body.tool === 'get_run') {
       const run = this.store.sameProject(args.runId, turn.projectId)
       requireThat(['run', 'workflow_run'].includes(run.kind), 'Run required')
@@ -673,7 +700,7 @@ export class PiBridge {
         tools: {
           workflow_operation: {
             operation:
-              'structure_novel | refine_chapters | propose_entities | add_reference | update_resource | update_entity_profile | select_references | generate_concepts | prepare_appearance_adjustment | generate_threeview | set_voice_design',
+              'structure_novel | refine_chapters | propose_entities | add_reference | remove_resource | update_resource | update_entity_profile | set_project_style | prepare_concept',
             parameters: {
               requestId: 'unique key',
               chapterId: 'propose_entities: chapter UUID',
@@ -684,26 +711,32 @@ export class PiBridge {
               description:
                 'optional per-reference note describing what the image or text should inform',
               assetId: 'reference image asset UUID',
-              resourceId: 'update_resource: current entity resource UUID',
+              resourceId: 'update_resource/remove_resource: exact entity resource UUID from context',
               expectedRevision:
                 'update_resource/update_entity_profile: revision read from workflow context',
               fields:
-                'update_resource: {name?, description?, text?}; update_entity_profile: {name?, description?}; updates the existing graph node and its current pending configuration when applicable',
+                'update_resource: {name?, description?, text?}; update_entity_profile: {name?, description?}; updates the existing graph node and its current pending configuration when applicable; editing concept_brief requires regenerating its paired prompt with update_resource',
               prompt:
-                'required for generate_concepts and prepare_appearance_adjustment; generate_threeview defaults to the fixed template prompt',
+                'required for prepare_concept and generate_concept; generate_concept uses the saved paired prompt',
+              description: 'prepare_concept: user-confirmed visual description, max 12000 chars; creates a branch under the entity root',
+              confirmedPlan:
+                'prepare_concept: true only after the user confirms the concept direction, reference usage and style scope in this conversation',
+              visualStyle:
+                'prepare_concept: optional style for this image only; use when the user confirms a one-image style and does not want to change project-wide style',
+              style:
+                'set_project_style: project-wide visual style explicitly confirmed by the user',
+              confirmed:
+                'set_project_style: true only after the user explicitly confirms this project-wide style',
+              expectedProjectRevision:
+                'set_project_style: project revision from workflow context',
               count:
-                '1..4 images total within the human grant; default 2 per prepared image Run',
+                'prepare_concept: count is not used; generate_concept submits one image from the selected saved branch after user confirmation',
               seed: 'optional integer, default 42',
               steps: 'optional integer 1..50, default 25',
               referenceIds:
-                'optional ordered entity image asset UUIDs for this Run only; manually-added reference images and prior concept/appearance images are valid; each Run has its own selection',
-              voiceDescription:
-                'set_voice_design: text-designed character voice direction; required, max 1200 chars',
-              sampleText:
-                'set_voice_design: short sentence spoken in the sample; required, max 1200 chars',
-              language: 'voice design: zh (default) or en',
-              selectReferences:
-                'select_references: referenceIds is the explicit ordered subset of this character’s image references',
+                'prepare_concept: ordered image asset UUIDs (assetId from context, not resource node id) bound to this design branch',
+              expectedBriefRevision: 'generate_concept: current revision of the selected concept_brief',
+              expectedPromptRevision: 'generate_concept: current revision of its paired concept_prompt',
               sourceId: 'structure_novel: existing source UUID',
               sourceRevision:
                 'refine_chapters: revision returned by read_source',
@@ -761,17 +794,25 @@ export class PiBridge {
           ? this.workflows.context(workflowSession.id)
           : null,
         goal: this.store.get(turn.discussionId).goal,
-        context: turn.context,
-        project: this.store.project(turn.projectId),
-        index: this.store
-          .list(turn.projectId)
-          .filter((o) => !['pi_binding', 'pi_turn'].includes(o.kind))
-          .map((o) => ({
-            id: o.id,
-            kind: o.kind,
-            name: o.name,
-            revision: o.revision
-          })),
+        context: (turn.context || []).map((item) => ({
+          kind: item.kind,
+          name: item.name
+        })),
+        project: (() => {
+          const { id, revision, ...project } = this.store.project(turn.projectId)
+          return project
+        })(),
+        index: workflowSession
+          ? []
+          : this.store
+              .list(turn.projectId)
+              .filter((o) => !['pi_binding', 'pi_turn'].includes(o.kind))
+              .map((o) => ({
+                id: o.id,
+                kind: o.kind,
+                name: o.name,
+                revision: o.revision
+              })),
         actionId: turn.actionId || null
       }
     if (body.tool === 'read_source' || body.tool === 'read_entity') {
@@ -839,7 +880,7 @@ export class PiBridge {
         owner: 'Sean',
         name: 'qwen-concept',
         version: 1,
-        text: 'Use the fixed Qwen Image 2.1 concept template. Clearly distinguish global identity from scene-only state. Preserve reference order. Business Workflow operations automatically bind immutable target/reference snapshots within the finite Workflow grant. Concepts may run in parallel and await formal appearance confirmation; the authorized fixed ThreeView then uses the selected appearance automatically. Legacy submit_action remains one-use. Never confirm a main appearance.'
+        text: 'Use the fixed Qwen Image 2.1 concept template. Clearly distinguish global identity from scene-only state. Preserve reference order. Business Workflow operations automatically bind immutable target/reference snapshots within the finite Workflow grant. Concepts may run in parallel and await formal appearance confirmation. Confirming the formal appearance does not start ThreeView; prepare ThreeView only in its dedicated Workflow conversation and wait for the graph configuration confirmation. Legacy submit_action remains one-use. Never confirm a main appearance.'
       }
       this.store.transaction(() =>
         this.store.create(turn.projectId, 'read_audit', {

@@ -378,7 +378,12 @@ export class Execution {
     const mediaType = run.stage === 'voice' ? 'audio' : 'image'
     const files = Object.entries(entry.outputs || {}).flatMap(
       ([nodeId, output]) =>
-        (output[mediaType] || [])
+        // ComfyUI's SaveImage node serializes image outputs under `images`;
+        // audio custom nodes commonly use `audio`. Keep the singular legacy
+        // key as a fallback for older/custom history payloads.
+        (output[mediaType === 'image' ? 'images' : mediaType] ||
+          output[mediaType] ||
+          [])
           .filter((f) => f.type === 'output')
           .map((f) => ({ ...f, nodeId }))
     )

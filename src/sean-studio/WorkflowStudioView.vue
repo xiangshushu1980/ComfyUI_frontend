@@ -76,6 +76,13 @@
         {{ syncMessage }}
       </div>
       <div ref="canvasHost" class="canvas-host">
+        <input
+          ref="referenceFileInput"
+          type="file"
+          accept="image/png"
+          hidden
+          @change="uploadReference"
+        />
         <canvas ref="canvasElement" />
         <div
           v-if="mediaPreview"
@@ -157,13 +164,9 @@
           :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
           role="menu"
           @pointerdown.stop
-          @click.stop
+          @click.stop="contextMenu = null"
           @contextmenu.prevent
         >
-          <strong>{{
-            contextNode?.name || kindName(contextNode?.kind || '')
-          }}</strong>
-          <button role="menuitem" @click="inspectContextNode">查看属性</button>
           <template v-if="contextNode?.kind === 'chapter'">
             <button
               role="menuitem"
@@ -184,85 +187,45 @@
             </button>
           </template>
           <template v-else-if="contextNode?.kind === 'entity'">
-            <button role="menuitem" @click="inspectContextNode">
-              编辑实体信息
+            <button
+              role="menuitem"
+              @click="beginReferenceImageUpload(contextNode.id)"
+            >
+              添加参考图片
             </button>
             <button
               role="menuitem"
-              @click="launchContextWorkflow('CreateEntity')"
+              @click="startEntityWorkflowConversation(contextNode.id)"
             >
-              开始实体制作流程
-            </button>
-          </template>
-          <template v-else-if="contextNode?.kind === 'proposal_item'">
-            <button
-              role="menuitem"
-              :disabled="
-                Boolean(contextNode.resolved) ||
-                !candidateCanConfirm(contextNode)
-              "
-              @click="acceptContextCandidate"
-            >
-              确认此候选
-            </button>
-            <button
-              role="menuitem"
-              :disabled="Boolean(contextNode.resolved)"
-              @click="rejectContextCandidate"
-            >
-              取消此候选
-            </button>
-            <button role="menuitem" @click="reviseContextCandidate">
-              复制修改指令并打开对话
+              新建概念图设计对话
             </button>
           </template>
           <template v-else-if="contextNode?.kind === 'resource'">
             <button
-              v-if="
-                ['concept', 'appearance_candidate'].includes(contextNode.role)
+              v-if="contextNode.role === 'concept_brief'"
+              role="menuitem"
+              :disabled="
+                conceptGenerating || !conceptPlanForBrief(contextNode)?.ready
               "
-              role="menuitem"
-              @click="confirmConcept(contextNode)"
+              @click="generateConceptFromBrief(contextNode)"
             >
-              确认为正式形象
-            </button>
-            <button
-              v-if="contextNode.role === 'threeview'"
-              role="menuitem"
-              @click="confirmThreeView(contextNode)"
-            >
-              确认三视图效果
-            </button>
-            <button
-              role="menuitem"
-              @click="launchContextWorkflow('CreateEntity')"
-            >
-              新建/继续处理此节点的 Agent
+              {{ conceptGenerating ? '提交中…' : '按此说明生成概念图' }}
             </button>
           </template>
-          <template v-else-if="contextNode?.kind === 'workflow_run'">
-            <button
-              v-if="contextNode.sessionId"
-              role="menuitem"
-              @click="openRunSession(contextNode)"
-            >
-              打开对应 Agent 对话
-            </button>
-          </template>
-          <template v-else-if="contextNode?.kind === 'workflow_conversation'">
-            <button role="menuitem" @click="openAgentConversation(contextNode)">
-              继续此对话
-            </button>
-          </template>
-          <template v-else-if="contextNode?.kind === 'workflow_agent'">
-            <button
-              v-if="!contextNode.deprecated"
-              role="menuitem"
-              @click="launchContextWorkflow(contextNode.workflowId)"
-            >
-              新建此工作流对话
-            </button>
-          </template>
+          <button
+            v-if="contextNode && canDeleteCanvasNode(contextNode)"
+            role="menuitem"
+            class="danger"
+            @click="
+              contextNode.kind === 'workflow_conversation'
+                ? removeWorkflowConversation(contextNode)
+                : contextNode.kind === 'proposal_item'
+                  ? rejectCandidate(contextNode)
+                  : removeCanvasNode(contextNode)
+            "
+          >
+            {{ deleteNodeLabel(contextNode) }}
+          </button>
         </div>
         <div class="legend">
           <template v-if="canvasMode === 'agents'">
@@ -279,8 +242,42 @@
           <span>{{ kindName(selected.kind) }} · v{{ selected.revision }}</span
           ><button @click="selected = null">×</button>
         </div>
-        <h2>{{ selected.name || kindName(selected.kind) }}</h2>
-        <p v-if="selected.kind !== 'entity'">
+        <h2
+          v-if="
+            selected.kind !== 'entity' &&
+            !(
+              selected.kind === 'resource' &&
+              [
+                'reference',
+                'entity_introduction',
+                'concept_brief',
+                'concept_prompt',
+                'appearance_prompt',
+                'threeview_brief',
+                'threeview_prompt'
+              ].includes(selected.role)
+            )
+          "
+        >
+          {{ selected.name || kindName(selected.kind) }}
+        </h2>
+        <p
+          v-if="
+            selected.kind !== 'entity' &&
+            !(
+              selected.kind === 'resource' &&
+              [
+                'reference',
+                'entity_introduction',
+                'concept_brief',
+                'concept_prompt',
+                'appearance_prompt',
+                'threeview_brief',
+                'threeview_prompt'
+              ].includes(selected.role)
+            )
+          "
+        >
           {{ selected.description || selected.brief }}
         </p>
         <template v-if="selected.kind === 'agent_project'">
@@ -291,6 +288,15 @@
           <p>
             {{ selected.workflowCount }} 个 Workflow ·
             {{ selected.conversationCount }} 个对话
+          </p>
+          <h3>全局画风</h3>
+          <p>
+            {{
+              (typeof project?.settings?.visualStyle === 'string'
+                ? project.settings.visualStyle
+                : project?.settings?.visualStyle?.text) ||
+              '尚未确认；概念图 Agent 会先询问'
+            }}
           </p>
           <h3>Pi 工作目录</h3>
           <p v-if="!selected.workspaces.length">首次创建对话后自动建立。</p>
@@ -405,44 +411,13 @@
           </button>
         </template>
         <template v-if="selected.kind === 'workflow_conversation'">
-          <p>目标：{{ objectById(selected.targetId)?.name || '影片工程' }}</p>
-          <p>工作区：{{ agentWorkspaceLabel(selected.workspaceId) }}</p>
-          <p>
-            PiWeb 会话：{{
-              selected.sessionName || selected.nativeSessionId || '尚未绑定'
-            }}
-          </p>
-          <p>
-            状态：{{ statusName(selected.status) }} ·
-            {{ selected.verified ? 'PiWeb 已验证' : 'PiWeb 尚未验证' }}
-          </p>
-          <p>
-            消息 {{ selected.messageCount ?? '待同步' }} 条 · 用户轮次
-            {{ selected.turnCount ?? '待同步' }} 轮
-          </p>
-          <p>
-            创建：{{ formatAgentTime(selected.createdAt) }}<br />更新：{{
-              formatAgentTime(selected.modifiedAt)
-            }}
-          </p>
           <p v-if="selected.goal">目标：{{ selected.goal }}</p>
-          <p v-if="selected.firstMessage">开场：{{ selected.firstMessage }}</p>
-          <pre v-if="selected.summary" class="agent-node-summary">{{
-            selected.summary
-          }}</pre>
           <button
-            :disabled="navigationBusy || selected.status === 'session_missing'"
+            :disabled="navigationBusy"
             @click="openAgentConversation(selected)"
           >
             {{
-              selected.status === 'session_missing'
-                ? 'PiWeb 对话缺失，先从 Workflow 新建'
-                : !selected.nativeSessionId
-                  ? '创建 PiWeb 对话'
-                  : selected.verified ||
-                      trustEntryOpenedFor === selected.workflowId
-                    ? '打开此 PiWeb 对话'
-                    : '打开工作区并信任'
+              selected.nativeSessionId ? '打开 PiWeb 对话' : '创建 PiWeb 对话'
             }}
             ↗
           </button>
@@ -480,7 +455,6 @@
           </p>
         </template>
         <template v-if="selected.kind === 'entity'">
-          <label>实体名称<input v-model="entityName" /></label>
           <label>实体描述<textarea v-model="entityDescription" /></label>
           <button class="primary" @click="saveEntityDetails">
             保存实体信息
@@ -493,24 +467,26 @@
           >
             {{ chapter.name }} ↗
           </button>
-          <h3>参考元素</h3>
-          <textarea
-            v-model="referenceText"
-            placeholder="参考描述、风格或外观要求"
-          /><button @click="addTextReference">保存参考描述</button
-          ><textarea
-            v-model="referenceDescription"
-            placeholder="为下一张图片写明用途，例如：参考发型、服装或构图"
-          />
-          <label class="upload"
-            >上传参考 PNG<input
-              type="file"
-              accept="image/png"
-              @change="uploadReference"
-          /></label>
           <p>正式形象：{{ selected.appearanceAssetId || '尚未确认' }}</p>
           <button @click="selectEntityIntroduction(selected)">
             查看实体介绍节点 ↗
+          </button>
+          <h3>Pi Agent 对话</h3>
+          <div
+            v-if="!entityAgentConversations(selected.id).length"
+            class="empty-list"
+          >
+            暂无对话
+          </div>
+          <button
+            v-for="conversation in entityAgentConversations(selected.id)"
+            :key="conversation.id"
+            class="conversation-link"
+            :disabled="navigationBusy"
+            @click="openAgentConversation(conversation)"
+          >
+            <strong>{{ conversation.goal || conversation.name }}</strong>
+            <span>打开 PiWeb ↗</span>
           </button>
         </template>
         <template v-if="selected.kind === 'proposal_item'">
@@ -579,7 +555,19 @@
             :src="contentUrl(selected.assetId)"
             class="resource-image"
           />
-          <pre v-else>{{ selected.text }}</pre>
+          <pre
+            v-else-if="
+              ![
+                'reference',
+                'entity_introduction',
+                'concept_brief',
+                'concept_prompt',
+                'appearance_prompt',
+                'threeview_brief',
+                'threeview_prompt'
+              ].includes(selected.role)
+            "
+            >{{ selected.text }}</pre>
           <p>
             {{ kindName(selected.role) }} · {{ statusName(selected.status) }}
           </p>
@@ -588,13 +576,14 @@
               [
                 'reference',
                 'entity_introduction',
+                'concept_brief',
                 'concept_prompt',
                 'appearance_prompt',
+                'threeview_brief',
                 'threeview_prompt'
               ].includes(selected.role)
             "
           >
-            <label>节点名称<input v-model="resourceName" /></label>
             <label v-if="selected.role === 'reference'"
               >这张图/素材参考什么<textarea v-model="resourceDescription" />
             </label>
@@ -605,19 +594,46 @@
             <label v-if="selected.role === 'entity_introduction'"
               >实体介绍<textarea v-model="resourceText" />
             </label>
+            <label v-if="selected.role === 'concept_brief'"
+              >概念图设计说明<textarea v-model="resourceText" />
+            </label>
+            <label v-if="selected.role === 'threeview_brief'"
+              >三视图设计说明<textarea v-model="resourceText" />
+            </label>
             <label v-if="selected.role.endsWith('_prompt')"
               >生成提示词<textarea v-model="resourceText" />
             </label>
             <button class="primary" @click="saveResourceDetails(selected)">
               保存并更新画布节点
             </button>
+            <button
+              v-if="selected.role === 'concept_brief'"
+              @click="askAgentToRefreshConceptPrompt(selected)"
+            >
+              让 Agent 根据说明更新提示词
+            </button>
+            <p
+              v-if="
+                selected.role === 'concept_brief' &&
+                latestConceptPlan(selected.entityId)?.prompt.status ===
+                  'needs_refresh'
+              "
+              class="error"
+            >
+              说明已修改，当前提示词需要 Agent 同步后才能生成。
+            </p>
           </template>
           <button
-            v-if="['concept', 'appearance_candidate'].includes(selected.role)"
+            v-if="
+              ['concept', 'appearance_candidate'].includes(selected.role) &&
+              objectById(selected.entityId)?.appearanceAssetId !==
+                selected.assetId
+            "
             class="primary"
+            :disabled="confirmingAppearanceId === selected.id"
             @click="confirmConcept(selected)"
           >
-            确认正式形象 · 准备三视图配置</button
+            确认正式形象</button
           ><button
             v-if="selected.role === 'threeview'"
             class="primary"
@@ -636,8 +652,26 @@
             @click="selectId(selected!.workflowRunId)"
           >
             查看来源 Run</button
-          ><button @click="enterResourceSession(selected)">
-            继续对应 PiWeb ↗
+          ><button
+            v-if="resourceAgentSession(selected)"
+            :disabled="navigationBusy"
+            @click="openAgentConversation(resourceAgentSession(selected)!)"
+          >
+            打开对应 Pi 对话 ↗
+          </button>
+          <button
+            v-else-if="resourceSessionId(selected)"
+            disabled
+            title="当前无法验证 PiWeb 会话，恢复连接后刷新画布再试"
+          >
+            对应 Pi 对话暂不可验证
+          </button>
+          <button
+            v-else
+            :disabled="navigationBusy"
+            @click="startResourceConversation(selected)"
+          >
+            为此图片新建 Pi 对话 ＋
           </button>
         </template>
         <template v-if="selected.kind === 'workflow_run'"
@@ -817,22 +851,6 @@ const definitions = ref<Obj[]>([]),
   showAllResources = ref(false),
   showHistory = ref(false)
 const mediaPreview = ref<Obj | null>(null)
-type AgentStatus = {
-  working: boolean
-  summary: string
-  piWebUrl: string | null
-  verified?: boolean
-  sessionFound?: boolean
-  messageCount?: number | null
-  turnCount?: number | null
-  createdAt?: string | null
-  modifiedAt?: string | null
-  firstMessage?: string
-  sessionName?: string
-  workspaceId?: string
-  workspaceLabel?: string
-}
-const agentStates = ref<Record<string, AgentStatus>>({})
 const activeWorkflowId = ref(''),
   workflowTargets = ref<Record<string, string>>({}),
   workflowContexts = ref<Record<string, string>>({}),
@@ -843,11 +861,10 @@ const agentError = ref(''),
   syncMessage = ref(''),
   workspaceToTrust = ref(''),
   error = ref('')
+const conceptGenerating = ref(false)
 const importing = ref(false),
   novelName = ref(''),
   novelText = ref(''),
-  referenceText = ref(''),
-  referenceDescription = ref(''),
   entityName = ref(''),
   entityDescription = ref(''),
   resourceName = ref(''),
@@ -855,6 +872,7 @@ const importing = ref(false),
   resourceText = ref('')
 const canvasHost = ref<HTMLElement>(),
   canvasElement = ref<HTMLCanvasElement>(),
+  referenceFileInput = ref<HTMLInputElement>(),
   native = ref<InstanceType<typeof NativeWorkflow>>(),
   executionSnapshot = ref<Obj | null>(null)
 const images = new Map<string, HTMLImageElement>()
@@ -865,12 +883,66 @@ const hoverTooltip = ref<{
   help: string
 } | null>(null)
 const invalidGlowId = ref('')
+const confirmingAppearanceId = ref('')
+let referenceUploadEntityId = ''
+let referenceUploadDescription = ''
 const contextMenu = ref<{ x: number; y: number; nodeId: string } | null>(null)
 const focusId = computed(() => navigationPath.value.at(-1) || '')
 const currentObject = computed(() => objectById(focusId.value))
+const runHasVisibleImages = (run: Obj) =>
+  (run.outputs || []).some((assetId: string) =>
+    objects.value.some(
+      (resource) =>
+        resource.kind === 'resource' &&
+        resource.workflowRunId === run.id &&
+        resource.assetId === assetId &&
+        resource.type === 'image' &&
+        resource.status !== 'removed'
+    )
+  )
 const visibleObjects = computed(() =>
   projectScope(objects.value, focusId.value, showAllResources.value).filter(
-    (o) => !navigationPath.value.slice(0, -1).includes(o.id)
+    (o) => {
+      if (o.canvasHidden) return false
+      if (o.status === 'removed') return false
+      // Keep concept design notes and prompts beside their generated images;
+      // only the execution Run itself stays in history to keep the canvas tidy.
+      if (
+        !showHistory.value &&
+        o.kind === 'workflow_run' &&
+        o.stage === 'concept'
+      )
+        return false
+      if (
+        navigationPath.value.slice(0, -1).includes(o.id) ||
+        isImplicitThreeviewDetail(o)
+      )
+        return false
+      // A legacy Run can list its design resource in immutable inputs while
+      // the resource itself lacks workflowRunId. Hide that detail in the
+      // current view when its only generated images have been removed; history
+      // mode still exposes it under the owning Run.
+      if (
+        !showHistory.value &&
+        o.kind === 'resource' &&
+        [
+          'concept_brief',
+          'concept_prompt',
+          'appearance_prompt',
+          'threeview_brief',
+          'threeview_prompt'
+        ].includes(o.role || '')
+      ) {
+        const run = objects.value.find(
+          (candidate) =>
+            candidate.kind === 'workflow_run' &&
+            (candidate.id === o.workflowRunId ||
+              candidate.inputs?.some((input: Obj) => input.id === o.id))
+        )
+        if (run && !runHasVisibleImages(run)) return false
+      }
+      return true
+    }
   )
 )
 const entities = computed(() =>
@@ -934,7 +1006,39 @@ const visibleWorkflowRuns = computed(() => {
   const ids = new Set(visibleObjects.value.map((o) => o.id))
   const scope = objects.value.find((o) => o.id === focusId.value)
   return runs.value.filter((run) => {
-    if (!showHistory.value && !activeRun(run)) return false
+    const latestWithResults = !runs.value.some(
+      (candidate) =>
+        candidate.targetId === run.targetId &&
+        candidate.stage === run.stage &&
+        runHasVisibleImages(candidate) &&
+        String(candidate.createdAt || '') > String(run.createdAt || '')
+    )
+    if (
+      !showHistory.value &&
+      !activeRun(run) &&
+      !(latestWithResults && runHasVisibleImages(run))
+    )
+      return false
+    if (
+      !showHistory.value &&
+      run.status === 'waiting_confirmation' &&
+      (run.outputs || []).length > 0 &&
+      !runHasVisibleImages(run)
+    )
+      return false
+    if (
+      run.stage === 'threeview' &&
+      !sessions.value
+        .find((session) => session.id === run.sessionId)
+        ?.goal?.startsWith('三视图生成')
+    )
+      return false
+    if (
+      ['concept', 'appearance', 'threeview'].includes(run.stage) &&
+      scope?.kind !== 'entity' &&
+      scope?.kind !== 'workflow_run'
+    )
+      return false
     if (scope?.kind === 'workflow_run') return false
     return (
       !focusId.value ||
@@ -946,34 +1050,9 @@ const visibleWorkflowRuns = computed(() => {
 })
 const visibleRunCount = computed(() => visibleWorkflowRuns.value.length)
 const canvasObjects = computed(() => [
-  ...visibleObjects.value
-    .filter((o) => o.kind !== 'proposal')
-    .map((object) => {
-      const activity = sessions.value.findLast((session) => {
-        if (session.closed) return false
-        if (session.contextId !== object.id && session.targetId !== object.id)
-          return false
-        return agentStates.value[session.id]?.working
-      })
-      if (!activity) return object
-      const definition = definitions.value.find(
-        (item) => item.id === activity.workflowId
-      )
-      const outputs: Record<string, string> = {
-        StructureNovel: '章节结构',
-        ExtractEntities: '实体候选',
-        CreateEntity: '实体制作资源',
-        GenerateThreeView: '三视图资源'
-      }
-      return {
-        ...object,
-        agentActivity: `${definition?.name || activity.workflowId} · 正在工作 · 输出：${outputs[activity.workflowId] || '创作数据'}`
-      }
-    }),
+  ...visibleObjects.value.filter((o) => o.kind !== 'proposal'),
   ...pendingProposalItems.value,
   ...visibleWorkflowRuns.value.map((run) => {
-    const session = sessions.value.find((item) => item.id === run.sessionId)
-    const state = session && agentStates.value[session.id]
     const outputTypes: Record<string, string> = {
       StructureNovel: '章节',
       ExtractEntities: '实体候选',
@@ -986,11 +1065,22 @@ const canvasObjects = computed(() => [
       workflowName:
         definitions.value.find((definition) => definition.id === run.workflowId)
           ?.name || run.name,
-      agentWorking: Boolean(state?.working),
-      preview: `${run.simulation ? '模拟流程' : ''}${run.simulation ? ' · ' : ''}${state?.working ? 'Agent 工作中' : statusName(effectiveRunStatus(run))} · ${runOutputSummary(run, outputTypes[run.workflowId] || '资源')}`
+      preview: `${run.simulation ? '模拟流程' : ''}${run.simulation ? ' · ' : ''}${statusName(effectiveRunStatus(run))} · ${runOutputSummary(run, outputTypes[run.workflowId] || '资源')}`
     }
   })
 ])
+function isImplicitThreeviewDetail(object: Obj) {
+  if (
+    object.kind !== 'resource' ||
+    !['threeview_brief', 'threeview_prompt'].includes(object.role || '') ||
+    !object.workflowRunId
+  )
+    return false
+  const run = runs.value.find((item) => item.id === object.workflowRunId)
+  if (!run) return false
+  const session = sessions.value.find((item) => item.id === run.sessionId)
+  return !session?.goal?.startsWith('三视图生成')
+}
 const contextNode = computed(() =>
   contextMenu.value ? objectById(contextMenu.value.nodeId) : null
 )
@@ -1040,8 +1130,8 @@ const agentGraphNodes = computed<Obj[]>(() => {
   const workspaceById = new Map(
     [...workspaceMap.values()].map((node) => [node.workspaceId, node])
   )
-  // Studio records express intent; a conversation node exists only while the
-  // exact PiWeb native session is present and its workspace binding is verified.
+  // Show persisted Pi bindings. PiWeb health is reconciled by explicit sync,
+  // rather than polling every conversation for display-only metadata.
   const graphSessions = sessions.value.filter(
     (session) =>
       !session.closed &&
@@ -1050,18 +1140,15 @@ const agentGraphNodes = computed<Obj[]>(() => {
           (binding) =>
             binding.kind === 'pi_binding' &&
             binding.discussionId === session.discussionId &&
-            binding.sessionId
-        ) && agentStates.value[session.id]?.sessionFound === true
+            binding.sessionId &&
+            binding.status !== 'session_missing'
+        )
       )
   )
   const workflowNodes = definitions.value.map((definition) => {
     const related = graphSessions.filter(
       (session) => session.workflowId === definition.id
     )
-    const relatedRuns = runs.value.filter(
-      (run) => run.workflowId === definition.id
-    )
-    const activeRuns = relatedRuns.filter(activeRun)
     const workspaceIds = new Set<string>()
     for (const session of related) {
       const binding = bindings.find(
@@ -1088,14 +1175,13 @@ const agentGraphNodes = computed<Obj[]>(() => {
       ),
       workspaceIds: [...workspaceIds],
       status: related.length ? '已建立对话' : '未开始',
-      preview: `${related.length} 个对话 · ${activeRuns.length} 个运行中/待确认 · ${related.filter((session) => agentStates.value[session.id]?.working).length} 个 Agent 工作中`
+      preview: `${related.length} 个对话`
     }
   })
   const conversationNodes = graphSessions.map((session) => {
     const binding = bindings.find(
       (item) => item.discussionId === session.discussionId
     )
-    const state = agentStates.value[session.id]
     const workspaceId = binding?.workspaceId || ''
     const workspace = workspaceById.get(workspaceId)
     if (workspace && !workspace.conversationIds.includes(session.id))
@@ -1104,22 +1190,11 @@ const agentGraphNodes = computed<Obj[]>(() => {
     const definition = definitions.value.find(
       (item) => item.id === session.workflowId
     )
-    const status =
-      state?.sessionFound === false || binding?.status === 'session_missing'
-        ? 'session_missing'
-        : !binding?.sessionId
-          ? 'pi_unbound'
-          : state?.working
-            ? 'working'
-            : binding.status === 'guard_unverified'
-              ? 'guard_unverified'
-              : effectiveSessionStatus(session) || 'ready'
     return {
       id: `agent-conversation:${session.id}`,
       kind: 'workflow_conversation',
       revision: session.revision,
       name:
-        state?.sessionName ||
         session.name ||
         `${definition?.name || session.workflowId} · ${target?.name || '工程'}`,
       workflowId: session.workflowId,
@@ -1127,29 +1202,10 @@ const agentGraphNodes = computed<Obj[]>(() => {
       discussionId: session.discussionId,
       targetId: session.targetId,
       nativeSessionId: binding?.sessionId || '',
-      sessionName: state?.sessionName || '',
       workspaceId,
       goal: session.goal,
-      status,
-      messageCount: state?.messageCount ?? null,
-      turnCount: state?.turnCount ?? null,
-      createdAt: state?.createdAt || session.createdAt || null,
-      modifiedAt: state?.modifiedAt || null,
-      firstMessage: state?.firstMessage || '',
-      summary: state?.summary || '',
-      verified: binding?.guardVersion === 1 && binding?.status === 'bound',
-      sessionRecord: session,
-      preview: [
-        statusName(status),
-        state?.sessionName || session.name || '',
-        session.goal || state?.firstMessage || '',
-        state?.messageCount == null
-          ? '消息数待同步'
-          : `${state.messageCount} 条消息`,
-        state?.modifiedAt ? `更新 ${formatAgentTime(state.modifiedAt)}` : ''
-      ]
-        .filter(Boolean)
-        .join(' · ')
+      preview:
+        session.goal || session.name || definition?.name || 'Workflow 对话'
     }
   })
   const workspaceNodes = [...workspaceMap.values()].map((workspace) => ({
@@ -1195,13 +1251,6 @@ function effectiveRunStatus(run: Obj) {
   )
     return 'succeeded'
   return run.status
-}
-function effectiveSessionStatus(session: Obj) {
-  if (session.status !== 'waiting_confirmation') return session.status
-  const relatedRuns = runs.value.filter((run) => run.sessionId === session.id)
-  return relatedRuns.length && relatedRuns.every((run) => !activeRun(run))
-    ? 'ready'
-    : session.status
 }
 function runOutputSummary(run: Obj, outputType: string) {
   if (run.workflowId === 'ExtractEntities') {
@@ -1251,9 +1300,14 @@ function runOutputSummary(run: Obj, outputType: string) {
 const activeRun = (run: Obj) =>
   !['succeeded', 'failed', 'cancelled'].includes(effectiveRunStatus(run))
 const objectById = (id: string) =>
-  objects.value.find((o) => o.id === id) ||
+  objects.value.find((o) => o.id === id && o.status !== 'removed') ||
   pendingProposalItems.value.find((o) => o.id === id) ||
-  agentGraphNodes.value.find((o) => o.id === id)
+  agentGraphNodes.value.find((o) => o.id === id) ||
+  agentGraphNodes.value.find(
+    (o) =>
+      o.kind === 'workflow_conversation' &&
+      `agent-conversation:${o.workflowSessionId}` === id
+  )
 const contentUrl = (id: string) => `/studio-api/v1/assets/${id}/content`
 const names: Record<string, string> = {
   agent_project: 'Studio / Pi 项目',
@@ -1271,6 +1325,8 @@ const names: Record<string, string> = {
   video: '视频',
   reference: '参考图/素材',
   entity_introduction: '实体介绍',
+  concept_brief: '概念图设计说明',
+  threeview_brief: '三视图设计说明',
   concept_prompt: 'Qwen Image 2.1 概念提示词',
   appearance_prompt: '形象调整提示词',
   threeview_prompt: '三视图提示词',
@@ -1347,29 +1403,69 @@ let graph: LGraph,
   canvas: LGraphCanvas,
   resizeObserver: ResizeObserver,
   events: EventSource | undefined,
-  poll: ReturnType<typeof setInterval> | undefined,
   viewTimer: ReturnType<typeof setTimeout> | undefined,
   inspectTimer: ReturnType<typeof setTimeout> | undefined,
   invalidGlowTimer: ReturnType<typeof setTimeout> | undefined,
-  refreshing = false
+  dismissContextMenu: ((event: PointerEvent) => void) | undefined,
+  projectEventSeq = 0,
+  refreshing = false,
+  refreshRequested = false
+const refreshWaiters: Array<{
+  resolve: () => void
+  reject: (error: unknown) => void
+}> = []
 const logicalCanvasViewport: Rect = [0, 0, 0, 0]
 let pointerStart: { x: number; y: number } | undefined
 let pointerDragged = false
+let nodeDrag:
+  | {
+      node: LGraphNode
+      pointerId: number
+      startX: number
+      startY: number
+      startPos: [number, number]
+      moved: boolean
+    }
+  | undefined
 function showError(e: unknown) {
   error.value = e instanceof Error ? e.message : String(e)
 }
 async function refresh() {
-  if (!projectId.value || refreshing) return
-  const id = projectId.value
+  if (!projectId.value) return
+  if (refreshing) {
+    refreshRequested = true
+    return new Promise<void>((resolve, reject) =>
+      refreshWaiters.push({ resolve, reject })
+    )
+  }
   refreshing = true
+  let refreshError: unknown
   try {
-    const snapshot = await studioApi(`/projects/${id}/snapshot`)
-    if (id !== projectId.value) return
-    project.value = snapshot.project
-    objects.value = snapshot.objects
-    if (selected.value) selected.value = objectById(selected.value.id) || null
+    do {
+      refreshRequested = false
+      const id = projectId.value
+      if (!id) break
+      const snapshot = await studioApi(`/projects/${id}/snapshot`)
+      if (id === projectId.value) {
+        project.value = snapshot.project
+        objects.value = snapshot.objects
+        projectEventSeq = Math.max(
+          projectEventSeq,
+          Number(snapshot.latestSeq) || 0
+        )
+        if (selected.value)
+          selected.value = objectById(selected.value.id) || null
+      }
+    } while (refreshRequested && projectId.value)
+  } catch (err) {
+    refreshError = err
+    throw err
   } finally {
     refreshing = false
+    for (const waiter of refreshWaiters.splice(0)) {
+      if (refreshError) waiter.reject(refreshError)
+      else waiter.resolve()
+    }
   }
 }
 async function syncPiProject() {
@@ -1382,7 +1478,6 @@ async function syncPiProject() {
       requestId: requestId()
     })
     await refresh()
-    await refreshAgent()
     syncMessage.value =
       `PiWeb 同步完成：${result.foundBindings} 个对话有效，` +
       `${result.resetEmpty} 个空会话可重新创建，` +
@@ -1396,16 +1491,29 @@ async function syncPiProject() {
     navigationBusy.value = false
   }
 }
+function handleProjectEvent(event: MessageEvent<string>) {
+  let update: Obj & { seq?: number; type?: string }
+  try {
+    update = JSON.parse(event.data)
+  } catch {
+    void refresh()
+    return
+  }
+  projectEventSeq = Math.max(projectEventSeq, Number(update.seq) || 0)
+  // Turn lifecycle events do not affect conversation count or navigation.
+  if (update.type?.startsWith('pi_turn.')) return
+  void refresh()
+}
 async function openProject() {
   mediaPreview.value = null
   events?.close()
+  projectEventSeq = 0
   project.value = undefined
   objects.value = []
   selected.value = null
   syncMessage.value = ''
   navigationPath.value = []
   sessionId.value = ''
-  agentStates.value = {}
   if (!projectId.value) return
   localStorage.setItem('sean-studio-project', projectId.value)
   try {
@@ -1429,12 +1537,9 @@ async function openProject() {
     projectGraph()
     restoreView()
     events = new EventSource(
-      `/studio-api/v1/projects/${projectId.value}/events`
+      `/studio-api/v1/projects/${projectId.value}/events?after=${projectEventSeq}`
     )
-    events.onmessage = () => {
-      void refresh()
-    }
-    void refreshAgent()
+    events.onmessage = handleProjectEvent
   } catch (e) {
     showError(e)
   }
@@ -1468,6 +1573,14 @@ function rememberView() {
       scale: canvas.ds.scale,
       offset: Array.from(canvas.ds.offset)
     })
+  )
+  localStorage.setItem(
+    `${viewKey()}:node-positions`,
+    JSON.stringify(
+      Object.fromEntries(
+        graph.nodes.map((node) => [String(node.id), [...node.pos]])
+      )
+    )
   )
 }
 function restoreView() {
@@ -1549,6 +1662,7 @@ function flashInvalidAction(id: string) {
   }, 700)
 }
 function nodePreview(o: Obj) {
+  if (o.kind === 'entity') return ''
   const source = o.sourceId && objectById(o.sourceId)
   const chapterText =
     o.kind === 'chapter' && source?.text
@@ -1562,7 +1676,8 @@ function nodePreview(o: Obj) {
     o.text ||
     o.status ||
     ''
-  return String(raw).replace(/\s+/g, ' ').trim().slice(0, 170)
+  const text = String(raw).replace(/\s+/g, ' ').trim()
+  return text.length > 170 ? `${text.slice(0, 169).trimEnd()}…` : text
 }
 function toggleCanvasMode() {
   switchCanvasMode(canvasMode.value === 'story' ? 'agents' : 'story')
@@ -1590,9 +1705,147 @@ function selectId(id: string) {
   const o = objectById(id)
   if (o) select(o)
 }
-function inspectContextNode() {
-  if (contextNode.value) select(contextNode.value)
+function hasContextActions(node: Obj) {
+  return (
+    ['chapter', 'source', 'entity'].includes(node.kind) ||
+    canDeleteCanvasNode(node) ||
+    (node.kind === 'resource' && node.role === 'concept_brief')
+  )
+}
+function canDeleteCanvasNode(node: Obj) {
+  // Persisted canvas objects share the same remove contract. The project root
+  // and synthetic Agent graph nodes are structural, not user content.
+  if (
+    node.id === focusId.value ||
+    ['project', 'agent_project', 'workflow_agent', 'agent_workspace'].includes(
+      node.kind
+    )
+  )
+    return false
+  if (node.kind === 'workflow_conversation') return true
+  if (node.kind === 'proposal_item')
+    return pendingProposalItems.value.some((item) => item.id === node.id)
+  return objects.value.some((object) => object.id === node.id)
+}
+function deleteNodeLabel(node: Obj) {
+  if (node.kind === 'proposal_item') return '取消此候选'
+  if (node.kind === 'resource') {
+    if (node.role === 'concept_brief') return '删除设计说明'
+    if (node.role === 'concept_prompt') return '删除提示词'
+    if (isEntityImage(node)) return '删除此图'
+  }
+  return `删除「${node.name || kindName(node.kind)}」`
+}
+function latestConceptPlan(entityId: string) {
+  const briefs = resources.value
+    .filter(
+      (resource) =>
+        resource.entityId === entityId &&
+        resource.role === 'concept_brief' &&
+        resource.status !== 'removed'
+    )
+    .sort((a, b) => Number(b.revision || 0) - Number(a.revision || 0))
+  for (const brief of briefs) {
+    const prompt = resources.value.find(
+      (resource) =>
+        resource.entityId === entityId &&
+        resource.role === 'concept_prompt' &&
+        (resource.conceptPlanId === brief.conceptPlanId ||
+          resource.sourceResourceIds?.includes(brief.id)) &&
+        resource.status !== 'removed'
+    )
+    if (prompt) return { brief, prompt }
+  }
+  return null
+}
+function conceptPlanForBrief(brief: Obj) {
+  const prompt = resources.value.find(
+    (resource) =>
+      resource.entityId === brief.entityId &&
+      resource.role === 'concept_prompt' &&
+      (resource.conceptPlanId === brief.conceptPlanId ||
+        resource.sourceResourceIds?.includes(brief.id)) &&
+      resource.status !== 'removed'
+  )
+  return {
+    brief,
+    prompt,
+    ready: Boolean(
+      prompt &&
+      brief.status !== 'needs_refresh' &&
+      prompt.status !== 'needs_refresh'
+    )
+  }
+}
+async function generateConceptFromBrief(brief: Obj) {
   contextMenu.value = null
+  const plan = conceptPlanForBrief(brief)
+  if (!plan.prompt || !plan.ready) return
+  const prompt = plan.prompt
+  const owningRun = runs.value.find(
+    (run) =>
+      run.inputs?.some((input: Obj) => input.id === plan.brief.id) ||
+      run.inputs?.some((input: Obj) => input.id === prompt.id)
+  )
+  const session = sessions.value.find(
+    (item) =>
+      (item.id === plan.brief.workflowSessionId ||
+        item.id === owningRun?.sessionId) &&
+      !item.closed
+  )
+  if (!session) {
+    showError(
+      new Error('找不到该概念设计对应的 Agent 对话，请先新建概念图设计对话。')
+    )
+    return
+  }
+  conceptGenerating.value = true
+  try {
+    await studioApi(`/workflow-sessions/${session.id}/generate-concept`, {
+      briefResourceId: plan.brief.id,
+      promptResourceId: prompt.id,
+      expectedBriefRevision: plan.brief.revision,
+      expectedPromptRevision: prompt.revision,
+      confirmedPlan: true,
+      requestId: requestId()
+    })
+    await refresh()
+  } catch (e) {
+    showError(e)
+  } finally {
+    conceptGenerating.value = false
+  }
+}
+async function askAgentToRefreshConceptPrompt(brief: Obj) {
+  const plan = latestConceptPlan(brief.entityId)
+  if (!plan) return
+  const sessionId =
+    brief.workflowSessionId ||
+    plan.prompt.workflowSessionId ||
+    runs.value.find((run) =>
+      run.inputs?.some((input: Obj) => input.id === brief.id)
+    )?.sessionId
+  const session = sessions.value.find(
+    (item) => item.id === sessionId && !item.closed
+  )
+  if (!session) {
+    await startEntityWorkflowConversation(brief.entityId)
+    return
+  }
+  const instruction = `请根据我刚保存的概念图设计说明，更新同一设计分支的 Qwen Image 2.1 提示词。保留已确认的引用图及其顺序和用途，不生成图片。设计说明资源：${brief.id}；提示词资源：${plan.prompt.id}。更新提示词资源后，确认其状态恢复为可生成。`
+  try {
+    await navigator.clipboard.writeText(instruction)
+  } catch {
+    // Opening the session still gives the user a direct place to continue.
+  }
+  await openAgentConversation({
+    id: `agent-conversation:${session.id}`,
+    kind: 'workflow_conversation',
+    revision: session.revision,
+    workflowSessionId: session.id
+  })
+  error.value =
+    '已打开概念图 Agent；请粘贴更新提示词的指令（若剪贴板允许，指令已复制）。'
 }
 async function launchContextWorkflow(workflowId: string) {
   const node = contextNode.value
@@ -1620,8 +1873,8 @@ async function launchContextWorkflow(workflowId: string) {
       await studioApi(`/workflow-sessions/${session.id}/authorize`, {
         confirmed: true,
         conceptCount: 4,
-        threeView: true,
-        voice: objectById(entityId!)?.type === 'character',
+        threeView: false,
+        voice: false,
         requestId: requestId()
       })
     } catch (e) {
@@ -1630,21 +1883,6 @@ async function launchContextWorkflow(workflowId: string) {
     }
   }
   await enterWorkflow(workflowId, entityId, contextId)
-}
-async function acceptContextCandidate() {
-  const candidate = contextNode.value
-  contextMenu.value = null
-  if (candidate?.kind === 'proposal_item') await confirmCandidate(candidate)
-}
-async function rejectContextCandidate() {
-  const candidate = contextNode.value
-  contextMenu.value = null
-  if (candidate?.kind === 'proposal_item') await rejectCandidate(candidate)
-}
-async function reviseContextCandidate() {
-  const candidate = contextNode.value
-  contextMenu.value = null
-  if (candidate?.kind === 'proposal_item') await reviseCandidate(candidate)
 }
 async function openCandidateConversation(candidate: Obj) {
   const session = sessions.value.find(
@@ -1855,7 +2093,10 @@ async function prepareWorkflow(workflowId: string, contextId?: string) {
     requestId: requestId()
   })) as Obj
 }
-async function createWorkflowConversation(workflowId: string) {
+async function createWorkflowConversation(workflowId: string, goal?: string) {
+  // Reserve a tab during the click gesture. Creating the Studio record and
+  // authorizing it are asynchronous; opening PiWeb afterwards is popup-blocked.
+  const piTab = window.open('about:blank', '_blank')
   try {
     const definition = definitions.value.find((item) => item.id === workflowId)
     const targetId = workflowTarget(workflowId)
@@ -1867,30 +2108,105 @@ async function createWorkflowConversation(workflowId: string) {
         workflowId,
         targetId,
         contextId: workflowContexts.value[workflowId] || null,
+        ...(goal ? { goal } : {}),
         newInstance: true,
         requestId: requestId()
       }
     )
     if (workflowId === 'CreateEntity') {
-      const target = objectById(targetId)
       await studioApi(`/workflow-sessions/${session.id}/authorize`, {
         confirmed: true,
-        conceptCount: 4,
-        threeView: true,
-        voice: target?.type === 'character',
+        conceptCount: goal?.startsWith('概念图生成') ? 4 : 0,
+        threeView: false,
+        voice: false,
         requestId: requestId()
       })
     }
-    await refresh()
     activeWorkflowId.value = workflowId
     sessionId.value = session.id
     if (definition?.target === 'entity')
       workflowTargets.value[workflowId] = targetId
-    agentError.value = '已创建独立对话。'
-    await openPiWeb()
+    let openError: unknown
+    try {
+      await navigatePiWeb(session, piTab)
+    } catch (e) {
+      openError = e
+      if (!(e instanceof Error && e.message.startsWith('PiWeb 工作区已打开'))) {
+        piTab?.close()
+      }
+    }
+    void refresh()
+    if (definition?.target === 'entity') {
+      canvasMode.value = 'agents'
+      localStorage.setItem('sean-studio-canvas-mode', 'agents')
+      await nextTick()
+      projectGraph()
+      const conversation = agentGraphNodes.value.find(
+        (node) => node.workflowSessionId === session.id
+      )
+      if (conversation) select(conversation)
+    }
+    if (openError) throw openError
+    agentError.value = ''
   } catch (e) {
+    if (!(e instanceof Error && e.message.startsWith('PiWeb 工作区已打开'))) {
+      piTab?.close()
+    }
     agentError.value = e instanceof Error ? e.message : String(e)
+    error.value = `对话已创建，但无法打开 PiWeb：${agentError.value}`
   }
+}
+async function startEntityWorkflowConversation(entityId: string) {
+  workflowTargets.value.CreateEntity = entityId
+  workflowContexts.value.CreateEntity = entityId
+  await createWorkflowConversation('CreateEntity', '概念图生成')
+}
+function entityAgentConversations(entityId: string) {
+  return agentGraphNodes.value.filter(
+    (node) =>
+      node.kind === 'workflow_conversation' && node.targetId === entityId
+  )
+}
+function resourceSessionId(resource: Obj) {
+  let sessionId = ''
+  if (resource.workflowRunId) {
+    const run = runs.value.find((item) => item.id === resource.workflowRunId)
+    sessionId = run?.sessionId || ''
+  } else if (resource.role === 'reference') {
+    const session =
+      sessions.value.find(
+        (item) =>
+          item.workflowId === 'CreateEntity' &&
+          item.targetId === resource.entityId &&
+          item.contextId === resource.id
+      ) ||
+      sessions.value.find(
+        (item) =>
+          item.workflowId === 'CreateEntity' &&
+          item.targetId === resource.entityId &&
+          String(item.goal || '').startsWith('参考图整理')
+      )
+    sessionId = session?.id || ''
+  }
+  return sessionId
+}
+function resourceAgentSession(resource: Obj) {
+  const session = sessions.value.find(
+    (item) => item.id === resourceSessionId(resource)
+  )
+  return session
+    ? agentGraphNodes.value.find(
+        (node) =>
+          node.kind === 'workflow_conversation' &&
+          node.workflowSessionId === session.id
+      )
+    : undefined
+}
+async function startResourceConversation(resource: Obj) {
+  workflowTargets.value.CreateEntity = resource.entityId
+  workflowContexts.value.CreateEntity = resource.id
+  const goal = resource.role === 'reference' ? '参考图整理' : '图片设计修改'
+  await createWorkflowConversation('CreateEntity', goal)
 }
 async function enterWorkflow(
   workflowId: string,
@@ -2106,34 +2422,6 @@ async function navigatePiWeb(session: Obj, tab: Window | null) {
     tab.opener = null
     tab.location.href = binding.piWebUrl
   } else window.location.assign(binding.piWebUrl)
-  await refreshAgent()
-}
-async function refreshAgent() {
-  const chosen = sessions.value.filter(
-    (session) =>
-      !session.closed &&
-      objects.value.some(
-        (binding) =>
-          binding.kind === 'pi_binding' &&
-          binding.discussionId === session.discussionId &&
-          binding.sessionId
-      )
-  )
-  const project = projectId.value
-  agentStates.value = {}
-  await Promise.allSettled(
-    chosen.map(async (session) => {
-      const status = await studioApi(
-        `/discussions/${session.discussionId}/agent-status`
-      )
-      if (projectId.value === project) agentStates.value[session.id] = status
-    })
-  )
-  if (selected.value?.kind === 'workflow_conversation') {
-    selected.value =
-      agentGraphNodes.value.find((node) => node.id === selected.value?.id) ||
-      selected.value
-  }
 }
 async function confirmCandidate(candidate: Obj) {
   const p = objects.value.find((item) => item.id === candidate.proposalId)
@@ -2175,14 +2463,18 @@ async function saveEntityDetails() {
     return
   }
   try {
-    await studioApi(`/objects/${entity.id}`, {
-      expectedRevision: entity.revision,
-      fields: {
-        name: entityName.value.trim(),
-        description: entityDescription.value.trim()
+    await studioApi(
+      `/objects/${entity.id}`,
+      {
+        expectedRevision: entity.revision,
+        fields: {
+          name: entityName.value.trim(),
+          description: entityDescription.value.trim()
+        },
+        requestId: requestId()
       },
-      requestId: requestId()
-    })
+      'PATCH'
+    )
     await refresh()
     syncMessage.value = '实体信息已更新。'
   } catch (e) {
@@ -2196,11 +2488,15 @@ async function saveResourceDetails(resource: Obj) {
     if (resource.type === 'text') fields.text = resourceText.value
   } else fields.text = resourceText.value
   try {
-    const updated = await studioApi(`/resources/${resource.id}`, {
-      expectedRevision: resource.revision,
-      fields,
-      requestId: requestId()
-    })
+    const updated = await studioApi(
+      `/resources/${resource.id}`,
+      {
+        expectedRevision: resource.revision,
+        fields,
+        requestId: requestId()
+      },
+      'PATCH'
+    )
     await refresh()
     selected.value = objectById(updated.id) || null
   } catch (e) {
@@ -2214,54 +2510,101 @@ function selectEntityIntroduction(entity: Obj) {
   )
   if (introduction) select(introduction)
 }
-async function addTextReference() {
-  const e = selected.value!
+function isEntityImage(resource: Obj) {
+  return (
+    resource.kind === 'resource' &&
+    resource.type === 'image' &&
+    Boolean(resource.entityId) &&
+    [
+      'reference',
+      'concept',
+      'appearance_candidate',
+      'appearance_current',
+      'threeview',
+      'threeview_current'
+    ].includes(resource.role)
+  )
+}
+async function removeCanvasNode(node: Obj) {
+  const label = node.name || kindName(node.kind)
+  contextMenu.value = null
+  error.value = ''
   try {
-    const s = await studioApi(
-      `/projects/${projectId.value}/workflow-sessions`,
-      { workflowId: 'CreateEntity', targetId: e.id, requestId: requestId() }
-    )
-    await studioApi(`/workflow-sessions/${s.id}/operations/add_reference`, {
-      type: 'text',
-      text: referenceText.value,
+    await studioApi(`/objects/${node.id}/remove`, {
+      expectedRevision: node.revision,
       requestId: requestId()
     })
-    referenceText.value = ''
+    if (selected.value?.id === node.id) selected.value = null
     await refresh()
-  } catch (err) {
-    showError(err)
+    error.value =
+      node.kind === 'workflow_run' && activeRun(node)
+        ? `已从画布隐藏运行节点「${label}」；后台运行会继续。`
+        : `已删除「${label}」节点。`
+  } catch (e) {
+    showError(e)
   }
+}
+function beginReferenceImageUpload(entityId: string) {
+  const description = window.prompt('这张参考图片用于参考什么？', '')
+  if (description === null || !referenceFileInput.value) return
+  referenceUploadEntityId = entityId
+  referenceUploadDescription = description.trim()
+  referenceFileInput.value.value = ''
+  referenceFileInput.value.click()
 }
 async function uploadReference(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
+  const entityId = referenceUploadEntityId
+  if (!entityId) return
   try {
     const bytes = new Uint8Array(await file.arrayBuffer())
     let binary = ''
     for (const byte of bytes) binary += String.fromCharCode(byte)
-    await studioApi(`/entities/${selected.value!.id}/reference-image`, {
+    await studioApi(`/entities/${entityId}/reference-image`, {
       name: file.name,
-      description: referenceDescription.value.trim(),
+      description: referenceUploadDescription,
       data: btoa(binary),
       requestId: requestId()
     })
-    referenceDescription.value = ''
+    referenceUploadEntityId = ''
+    referenceUploadDescription = ''
     await refresh()
   } catch (e) {
     showError(e)
   }
 }
 async function confirmConcept(resource: Obj) {
+  if (confirmingAppearanceId.value) return
   try {
     const e = objectById(resource.entityId)!
+    if (e.appearanceAssetId === resource.assetId) {
+      syncMessage.value = '这张图片已经是主形象。'
+      await refresh()
+      return
+    }
+    confirmingAppearanceId.value = resource.id
     await studioApi(`/entities/${e.id}/appearance`, {
       assetId: resource.assetId,
       expectedRevision: e.revision,
       requestId: requestId()
     })
-    await refresh()
+    syncMessage.value = '主形象已更新。'
+    try {
+      await refresh()
+      await nextTick()
+      projectGraph()
+    } catch (refreshError) {
+      showError(
+        new Error(
+          `主形象已保存，但画布刷新失败：${refreshError instanceof Error ? refreshError.message : String(refreshError)}`
+        )
+      )
+    }
   } catch (e) {
     showError(e)
+  } finally {
+    confirmingAppearanceId.value = ''
   }
 }
 async function confirmGeneration(run: Obj) {
@@ -2422,11 +2765,6 @@ async function removeWorkflowConversation(node: Obj) {
     navigationBusy.value = false
   }
 }
-async function enterResourceSession(resource: Obj) {
-  const run = objectById(resource.workflowRunId)
-  if (run) await openRunSession(run)
-  else await enterWorkflow('CreateEntity', resource.entityId, resource.id)
-}
 async function viewExecution(run: Obj) {
   executionSnapshot.value = objectById(run.childRunIds[0]) || null
   await nextTick()
@@ -2477,8 +2815,40 @@ function projectGraph() {
       .map((asset) => [asset.id, asset])
   )
   const titleMeasure = document.createElement('canvas').getContext('2d')
-  if (titleMeasure)
-    titleMeasure.font = `${LiteGraph.NODE_TEXT_SIZE}px ${LiteGraph.NODE_FONT}`
+  const wrapText = (value: string, width: number, font: string) => {
+    if (!titleMeasure || !value) return []
+    titleMeasure.font = font
+    const lines: string[] = []
+    let line = ''
+    for (const character of value) {
+      const next = line + character
+      if (line && titleMeasure.measureText(next).width > width) {
+        lines.push(line)
+        line = character.trimStart()
+      } else line = next
+    }
+    if (line) lines.push(line)
+    return lines
+  }
+  const entityPreviewAssets = new Map<string, Obj>()
+  const entitiesById = new Map(
+    objects.value
+      .filter((object) => object.kind === 'entity')
+      .map((entity) => [entity.id, entity])
+  )
+  for (const resource of objects.value) {
+    if (
+      resource.kind === 'resource' &&
+      resource.role === 'appearance_current' &&
+      resource.type === 'image' &&
+      resource.assetId &&
+      resource.entityId &&
+      resource.status !== 'removed' &&
+      entitiesById.get(resource.entityId)?.appearanceAssetId ===
+        resource.assetId
+    )
+      entityPreviewAssets.set(resource.entityId, resource)
+  }
   const nodeDimensions = new Map<
     string,
     {
@@ -2486,33 +2856,119 @@ function projectGraph() {
       height: number
       previewWidth: number
       previewHeight: number
+      imageOnly: boolean
+      entityTile: boolean
+      assetId: string
+      titleLines: string[]
+      bodyLines: string[]
     }
   >(
     visible.map((object) => {
       const title = object.name || kindName(object.kind)
-      const titleWidth = titleMeasure?.measureText(title).width || 0
-      const asset = assetsById.get(object.assetId)
+      const entityResource = entityPreviewAssets.get(object.id)
+      const assetId =
+        entityResource?.assetId ||
+        object.appearanceAssetId ||
+        object.assetId ||
+        ''
+      const asset = assetsById.get(assetId)
       const sourceWidth = asset?.width || 384
       const sourceHeight = asset?.height || 256
+      const isImage = Boolean(
+        assetId && (object.kind === 'entity' || object.type === 'image')
+      )
       const previewScale =
-        object.assetId && ['image', 'video'].includes(object.type)
-          ? Math.min(1, 640 / sourceWidth, 480 / sourceHeight)
+        assetId && (isImage || object.type === 'video')
+          ? Math.min(
+              1,
+              (isImage ? 360 : 640) / sourceWidth,
+              (isImage ? 240 : 480) / sourceHeight
+            )
           : 0
       const previewWidth = Math.round(sourceWidth * previewScale)
       const previewHeight = Math.round(sourceHeight * previewScale)
+      const entityTile = object.kind === 'entity' && !assetId
+      const imageOnly = Boolean(isImage)
+      const bodyText = entityTile
+        ? ''
+        : object.type === 'audio'
+          ? `♫ 双击试听 · ${statusName(object.status)}${nodePreview(object) ? ` · ${nodePreview(object)}` : ''}`
+          : object.type === 'video'
+            ? `▶ 双击播放 · ${statusName(object.status)}${nodePreview(object) ? ` · ${nodePreview(object)}` : ''}`
+            : nodePreview(object)
+      const preferredWidth = Math.max(
+        190,
+        Math.min(
+          276,
+          Math.ceil(
+            Math.max(
+              titleMeasure?.measureText(title).width || 0,
+              titleMeasure?.measureText(bodyText.slice(0, 28)).width || 0
+            )
+          )
+        )
+      )
+      const textWidth = entityTile
+        ? Math.max(
+            156,
+            Math.min(
+              236,
+              Math.ceil(titleMeasure?.measureText(title).width || 140)
+            )
+          )
+        : preferredWidth
+      const titleLines = wrapText(
+        title,
+        entityTile ? 180 : textWidth,
+        '600 13px system-ui'
+      )
+      const bodyLines = wrapText(bodyText, textWidth, '12px system-ui')
+      const activityLines = object.agentActivity
+        ? wrapText(object.agentActivity, textWidth, '12px system-ui')
+        : []
+      const textHeight =
+        20 +
+        titleLines.length * 17 +
+        (activityLines.length ? 5 + activityLines.length * 16 : 0) +
+        (bodyLines.length ? 5 + bodyLines.length * 16 : 0) +
+        8
       return [
         object.id,
         {
-          width: Math.max(320, Math.ceil(titleWidth + 52), previewWidth + 24),
-          height: Math.max(240, previewHeight + 74),
+          width: imageOnly
+            ? previewWidth
+            : entityTile
+              ? 200
+              : Math.max(textWidth, previewWidth),
+          height: imageOnly
+            ? previewHeight
+            : entityTile
+              ? 108
+              : Math.max(
+                  textHeight +
+                    (object.type === 'video' ? previewHeight + 8 : 0),
+                  previewHeight + 48
+                ),
           previewWidth,
-          previewHeight
+          previewHeight,
+          imageOnly,
+          entityTile,
+          assetId,
+          titleLines,
+          bodyLines
         }
       ]
     })
   )
   // Lay out a spanning forest; cross references remain edges, never duplicate nodes.
   const byId = new Map(visible.map((o) => [o.id, o]))
+  const resourceRunId = (resource: Obj) =>
+    // Older Runs may contain a detail resource as an input without its own
+    // workflowRunId. Recover that ownership from the immutable Run snapshot.
+    resource.workflowRunId ||
+    runs.value.find((run) =>
+      (run.inputs || []).some((input: Obj) => input.id === resource.id)
+    )?.id
   const children = new Map<string, Obj[]>()
   const roots: Obj[] = []
   for (const o of visible) {
@@ -2520,12 +2976,37 @@ function projectGraph() {
       o.kind === 'chapter'
         ? chapterParents.get(o.id)
         : o.kind === 'workflow_run'
-          ? o.inputs?.find((input: Obj) => byId.has(input.id))?.id
+          ? o.stage === 'concept'
+            ? o.inputs?.find(
+                (input: Obj) => byId.get(input.id)?.role === 'concept_prompt'
+              )?.id || o.targetId
+            : byId.has(o.parentId || '')
+              ? o.parentId
+              : o.inputs?.find((input: Obj) => byId.has(input.id))?.id ||
+                o.targetId
           : o.kind === 'proposal_item'
             ? byId.has(o.workflowRunId)
               ? o.workflowRunId
               : o.chapterId
-            : o.chapterId || o.entityId
+            : o.kind === 'resource' && o.role === 'concept'
+              ? o.sourceResourceIds?.find(
+                  (id: string) => byId.get(id)?.role === 'concept_prompt'
+                ) || null
+              : o.kind === 'resource' && o.role === 'concept_brief'
+                ? o.entityId
+                : o.kind === 'resource' && o.role === 'concept_prompt'
+                  ? o.sourceResourceIds?.find(
+                      (id: string) => byId.get(id)?.role === 'concept_brief'
+                    ) || o.entityId
+                  : o.kind === 'resource' &&
+                      resourceRunId(o) &&
+                      o.role !== 'concept_brief' &&
+                      o.role !== 'concept_prompt' &&
+                      byId.has(resourceRunId(o) || '')
+                    ? resourceRunId(o)
+                    : o.kind === 'resource' && o.entityId
+                      ? o.entityId
+                      : o.parentId || o.chapterId || o.entityId
     if (o.kind === 'entity') {
       parentId = objects.value.find(
         (r) =>
@@ -2549,33 +3030,87 @@ function projectGraph() {
       children.set(parentId, siblings)
     } else roots.push(o)
   }
+  // A compact tidy-tree layout: center each parent over its children, and
+  // reserve vertical space using the real (possibly image-driven) node sizes.
   const positions = new Map<string, [number, number]>()
   const nodeDepths = new Map<string, number>()
   const columnWidths: number[] = []
+  const subtreeHeights = new Map<string, number>()
+  const measure = (o: Obj, path = new Set<string>()): number => {
+    const cached = subtreeHeights.get(o.id)
+    if (cached !== undefined) return cached
+    const ownHeight = nodeDimensions.get(o.id)?.height || 150
+    if (path.has(o.id)) return ownHeight
+    const nextPath = new Set(path).add(o.id)
+    const childHeights = (children.get(o.id) || []).map((child) =>
+      measure(child, nextPath)
+    )
+    const childrenHeight =
+      childHeights.reduce((sum, height) => sum + height, 0) +
+      Math.max(0, childHeights.length - 1) * 28
+    const height = Math.max(ownHeight, childrenHeight)
+    subtreeHeights.set(o.id, height)
+    return height
+  }
   const visited = new Set<string>()
-  let row = 0
-  const place = (o: Obj, depth: number) => {
+  const place = (o: Obj, depth: number, top: number) => {
     if (visited.has(o.id)) return
     visited.add(o.id)
-    const start = row
-    for (const child of children.get(o.id) || []) place(child, depth + 1)
-    if (row === start) row += (nodeDimensions.get(o.id)?.height || 150) + 50
+    const ownHeight = nodeDimensions.get(o.id)?.height || 150
+    const subtreeHeight = measure(o)
+    const childList = children.get(o.id) || []
+    const childrenHeight =
+      childList.reduce((sum, child) => sum + measure(child), 0) +
+      Math.max(0, childList.length - 1) * 28
+    let childTop = top + (subtreeHeight - childrenHeight) / 2
+    for (const child of childList) {
+      place(child, depth + 1, childTop)
+      childTop += measure(child) + 28
+    }
     nodeDepths.set(o.id, depth)
     columnWidths[depth] = Math.max(
-      columnWidths[depth] || 320,
+      columnWidths[depth] || 0,
       nodeDimensions.get(o.id)?.width || 320
     )
-    positions.set(o.id, [0, start])
+    positions.set(o.id, [0, top + (subtreeHeight - ownHeight) / 2])
   }
-  for (const root of roots) place(root, 0)
-  for (const o of visible) place(o, 0)
+  let cursor = 0
+  for (const root of roots) {
+    place(root, 0, cursor)
+    cursor += measure(root) + 48
+  }
+  for (const o of visible) {
+    if (visited.has(o.id)) continue
+    place(o, 0, cursor)
+    cursor += measure(o) + 48
+  }
   const columnOffsets: number[] = []
   for (let depth = 0; depth < columnWidths.length; depth++)
     columnOffsets[depth] =
       (columnOffsets[depth - 1] || 0) +
-      (depth ? columnWidths[depth - 1] + 80 : 0)
+      (depth ? columnWidths[depth - 1] + 52 : 0)
   for (const [id, position] of positions)
     position[0] = columnOffsets[nodeDepths.get(id) || 0] || 0
+  try {
+    const savedPositions = JSON.parse(
+      localStorage.getItem(`${viewKey()}:node-positions`) || '{}'
+    ) as Record<string, unknown>
+    for (const [id, position] of positions) {
+      const saved = savedPositions[id]
+      if (
+        Array.isArray(saved) &&
+        saved.length === 2 &&
+        saved.every(
+          (value) => typeof value === 'number' && Number.isFinite(value)
+        )
+      ) {
+        position[0] = saved[0]
+        position[1] = saved[1]
+      }
+    }
+  } catch {
+    /* Ignore invalid local node layout preferences. */
+  }
   for (const o of visible) {
     const title = o.name || kindName(o.kind)
     const n = new LGraphNode(title)
@@ -2590,8 +3125,10 @@ function projectGraph() {
             ? 145
             : 150)
     ]
-    n.color =
-      o.kind === 'entity'
+    const dimensions = nodeDimensions.get(o.id)!
+    n.color = dimensions.imageOnly
+      ? 'transparent'
+      : o.kind === 'entity'
         ? '#245853'
         : o.kind === 'proposal_item'
           ? '#665231'
@@ -2602,25 +3139,36 @@ function projectGraph() {
                 ? '#455b70'
                 : '#354c48'
             : '#2a3e52'
-    n.bgcolor = '#152431'
+    n.bgcolor = dimensions.imageOnly ? 'transparent' : '#152431'
+    Object.defineProperty(n, 'title_mode', { value: LiteGraph.NO_TITLE })
+    if (dimensions.imageOnly || dimensions.entityTile) {
+      n.shape = LiteGraph.BOX_SHAPE
+    }
     n.addInput('', '*')
     n.addOutput('', '*')
-    if (o.assetId && ['image', 'video'].includes(o.type)) {
-      let image = images.get(o.assetId)
+    // LiteGraph expands nodes to fit their native title when slots are added.
+    // Titles are rendered by this view, so restore the measured canvas size.
+    n.size = [dimensions.width, dimensions.height]
+    if (dimensions.assetId && (dimensions.imageOnly || o.type === 'video')) {
+      let image = images.get(dimensions.assetId)
       if (!image) {
         image = new Image()
-        image.src = `/studio-api/v1/assets/${o.assetId}/${o.type === 'video' ? 'thumbnail' : 'content'}`
+        image.src = `/studio-api/v1/assets/${dimensions.assetId}/${o.type === 'video' ? 'thumbnail' : 'content'}`
         image.onload = () => canvas.setDirty(true, true)
-        image.onerror = () => images.delete(o.assetId)
-        images.set(o.assetId, image)
+        image.onerror = () => images.delete(dimensions.assetId)
+        images.set(dimensions.assetId, image)
       }
       n.onDrawBackground = (ctx) => {
         if (image?.complete && image.naturalWidth) {
           const dimensions = nodeDimensions.get(o.id)!
           ctx.drawImage(
             image,
-            (n.size[0] - dimensions.previewWidth) / 2,
-            58,
+            dimensions.imageOnly
+              ? 0
+              : (n.size[0] - dimensions.previewWidth) / 2,
+            dimensions.imageOnly
+              ? 0
+              : 8 + dimensions.titleLines.length * 17 + 5,
             dimensions.previewWidth,
             dimensions.previewHeight
           )
@@ -2637,6 +3185,106 @@ function projectGraph() {
         ctx.strokeRect(2, 2, n.size[0] - 4, n.size[1] - 4)
       }
       ctx.restore()
+      if (dimensions.imageOnly) {
+        ctx.save()
+        const imageTypeLabel =
+          o.role === 'reference'
+            ? '参考图'
+            : ['threeview', 'threeview_current'].includes(o.role || '')
+              ? '三视图'
+              : [
+                    'concept',
+                    'appearance_candidate',
+                    'appearance_current'
+                  ].includes(o.role || '')
+                ? '概念图'
+                : ''
+        if (imageTypeLabel) {
+          const badgeScale = 1 / canvas.ds.scale
+          ctx.font = `600 ${13 * badgeScale}px system-ui`
+          const badgeWidth =
+            ctx.measureText(imageTypeLabel).width + 20 * badgeScale
+          const badgeHeight = 28 * badgeScale
+          const badgeX = (n.size[0] - badgeWidth) / 2
+          const badgeY = (n.size[1] - badgeHeight) / 2
+          ctx.fillStyle = 'rgba(8, 18, 26, 0.78)'
+          ctx.beginPath()
+          ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 7 * badgeScale)
+          ctx.fill()
+          ctx.fillStyle = '#f1f5f7'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(imageTypeLabel, n.size[0] / 2, n.size[1] / 2)
+        }
+        if (o.role === 'appearance_current') {
+          ctx.strokeStyle = '#f0bd4d'
+          ctx.lineWidth = 4 / canvas.ds.scale
+          ctx.strokeRect(2, 2, n.size[0] - 4, n.size[1] - 4)
+          const badgeScale = 1 / canvas.ds.scale
+          ctx.font = `600 ${12 * badgeScale}px system-ui`
+          const badgeWidth = ctx.measureText('主形象').width + 16 * badgeScale
+          const badgeHeight = 24 * badgeScale
+          const badgeX = 8 * badgeScale
+          const badgeY = 8 * badgeScale
+          ctx.fillStyle = '#f0bd4d'
+          ctx.beginPath()
+          ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 5 * badgeScale)
+          ctx.fill()
+          ctx.fillStyle = '#18232b'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(
+            '主形象',
+            badgeX + badgeWidth / 2,
+            badgeY + badgeHeight / 2
+          )
+        }
+        const labelLines = wrapText(
+          o.name || '图片',
+          n.size[0] - 16,
+          '12px system-ui'
+        )
+        const labelHeight = Math.max(24, labelLines.length * 15 + 8)
+        ctx.font = '12px system-ui'
+        const labelWidth = Math.min(
+          n.size[0],
+          Math.max(
+            ...labelLines.map((line) => ctx.measureText(line).width),
+            0
+          ) + 16
+        )
+        const labelX = (n.size[0] - labelWidth) / 2
+        const labelY = n.size[1] - labelHeight
+        ctx.fillStyle = 'rgba(8, 18, 26, 0.76)'
+        ctx.fillRect(labelX, labelY, labelWidth, labelHeight)
+        ctx.fillStyle = '#f1f5f7'
+        ctx.textBaseline = 'top'
+        ctx.textAlign = 'center'
+        labelLines.forEach((line, index) =>
+          ctx.fillText(line, n.size[0] / 2, labelY + 4 + index * 15)
+        )
+        ctx.restore()
+        return
+      }
+      if (dimensions.entityTile) {
+        ctx.fillStyle = '#245853'
+        ctx.beginPath()
+        ctx.roundRect(0, 0, n.size[0], n.size[1], 7)
+        ctx.fill()
+        ctx.font = '600 13px system-ui'
+        ctx.fillStyle = '#f1f5f7'
+        ctx.textBaseline = 'top'
+        const titleHeight = dimensions.titleLines.length * 17
+        dimensions.titleLines.forEach((line, index) => {
+          const lineWidth = ctx.measureText(line).width
+          ctx.fillText(
+            line,
+            (n.size[0] - lineWidth) / 2,
+            (n.size[1] - titleHeight) / 2 + index * 17
+          )
+        })
+        return
+      }
       const drillStatus =
         focusId.value === o.id
           ? '当前层'
@@ -2657,64 +3305,111 @@ function projectGraph() {
         ctx.restore()
       }
       ctx.save()
+      ctx.fillStyle = '#203342'
       ctx.beginPath()
-      ctx.rect(10, 24, n.size[0] - 20, n.size[1] - 24)
-      ctx.clip()
-      ctx.fillStyle = '#9eb4c4'
-      ctx.font = '12px system-ui'
-      ctx.fillText(
-        o.kind === 'workflow_run'
-          ? `${o.agentWorking ? '◉ Agent 工作中' : statusName(o.displayStatus || effectiveRunStatus(o))} · ${o.workflowName || o.name}`
-          : `${kindName(o.kind)} · ${kindName(o.role || kindName(o.item?.type || o.type || ''))}`,
-        14,
-        40
+      ctx.roundRect(0, 0, n.size[0], n.size[1], 7)
+      ctx.fill()
+      ctx.textBaseline = 'top'
+      ctx.font = '600 13px system-ui'
+      ctx.fillStyle = '#f1f5f7'
+      ctx.textAlign = 'center'
+      dimensions.titleLines.forEach((line, index) =>
+        ctx.fillText(line, n.size[0] / 2, 8 + index * 17, n.size[0])
       )
+      let textY = 8 + dimensions.titleLines.length * 17 + 17
       if (o.agentActivity) {
-        ctx.fillStyle = '#8fd1ae'
-        ctx.fillText(`◉ ${o.agentActivity}`, 14, 58, 286)
-      }
-      if (!o.assetId || o.type === 'audio' || o.type === 'video') {
-        ctx.fillStyle = '#d4e0e6'
         ctx.font = '12px system-ui'
-        const lines: string[] =
-          o.type === 'audio'
-            ? ['♫ 双击在画布中试听', statusName(o.status)]
-            : o.type === 'video'
-              ? ['▶ 双击在画布中播放', statusName(o.status)]
-              : []
-        let line = ''
-        for (const character of nodePreview(o)) {
-          const next = line + character
-          if (line && ctx.measureText(next).width > n.size[0] - 34) {
-            lines.push(line)
-            line = character.trimStart()
-          } else line = next
-        }
-        if (line) lines.push(line)
-        lines
-          .slice(0, 4)
-          .forEach((text, index) =>
-            ctx.fillText(
-              text,
-              14,
-              (o.agentActivity ? 88 : 72) + index * 17,
-              n.size[0] - 34
-            )
-          )
+        ctx.fillStyle = '#8fd1ae'
+        ctx.textAlign = 'left'
+        const activityLines = wrapText(
+          `◉ ${o.agentActivity}`,
+          n.size[0],
+          '12px system-ui'
+        )
+        activityLines.forEach((line, index) =>
+          ctx.fillText(line, 0, textY + index * 16, n.size[0])
+        )
+        textY += activityLines.length * 16 + 5
       }
+      if (o.type === 'video') textY += dimensions.previewHeight + 8
+      ctx.font = '12px system-ui'
+      ctx.fillStyle = '#d4e0e6'
+      ctx.textAlign = 'left'
+      dimensions.bodyLines.forEach((line, index) =>
+        ctx.fillText(line, 0, textY + index * 16, n.size[0])
+      )
       ctx.restore()
     }
     graph.add(n)
   }
-  const edges = objects.value.filter(
-    (o) =>
-      ['data_relation', 'relation'].includes(o.kind) &&
-      !(
-        o.type === 'contains' &&
+  const workflowDetailRoles = new Set([
+    'concept_brief',
+    'concept_prompt',
+    'appearance_prompt',
+    'threeview_brief',
+    'threeview_prompt'
+  ])
+  const edges = objects.value.filter((o) => {
+    if (!['data_relation', 'relation'].includes(o.kind)) return false
+    const from = byId.get(o.fromId),
+      to = byId.get(o.toId)
+    return !(
+      (o.type === 'contains' &&
         chapterParents.has(o.toId) &&
-        o.fromId === byId.get(o.toId)?.sourceId
-      )
-  )
+        o.fromId === byId.get(o.toId)?.sourceId) ||
+      o.type === 'informs_concept' ||
+      o.type === 'informs_prompt' ||
+      workflowDetailRoles.has(from?.role || '') ||
+      workflowDetailRoles.has(to?.role || '') ||
+      from?.role === 'concept' ||
+      to?.role === 'concept' ||
+      (from?.kind === 'workflow_run' && from.stage === 'concept') ||
+      (to?.kind === 'workflow_run' && to.stage === 'concept') ||
+      (from?.kind === 'resource' && from.entityId) ||
+      (to?.kind === 'resource' && to.entityId) ||
+      (o.type === 'owns' && to?.kind === 'resource' && to.role === 'reference')
+    )
+  })
+  for (const detail of visible.filter(
+    (o) => o.kind === 'resource' && o.role === 'concept_brief'
+  )) {
+    if (byId.has(detail.entityId))
+      edges.push({
+        id: `${detail.entityId}:concept-brief:${detail.id}`,
+        kind: 'data_relation',
+        revision: 1,
+        fromId: detail.entityId,
+        toId: detail.id
+      })
+  }
+  for (const detail of visible.filter(
+    (o) => o.kind === 'resource' && o.role === 'concept_prompt'
+  )) {
+    const brief = (detail.sourceResourceIds || [])
+      .map((id: string) => byId.get(id))
+      .find((source: Obj | undefined) => source?.role === 'concept_brief')
+    if (brief)
+      edges.push({
+        id: `${brief.id}:prompt:${detail.id}`,
+        kind: 'data_relation',
+        revision: 1,
+        fromId: brief.id,
+        toId: detail.id
+      })
+    for (const image of visible.filter(
+      (item) =>
+        item.kind === 'resource' &&
+        item.role === 'concept' &&
+        item.sourceResourceIds?.includes(detail.id)
+    ))
+      edges.push({
+        id: `${detail.id}:concept-output:${image.id}`,
+        kind: 'execution_relation',
+        revision: 1,
+        fromId: detail.id,
+        toId: image.id
+      })
+  }
   for (const o of visible) {
     if (o.kind === 'entity')
       for (const chapter of visible.filter((item) => item.kind === 'chapter'))
@@ -2750,7 +3445,12 @@ function projectGraph() {
         fromId: o.chapterId,
         toId: o.id
       })
-    if (o.entityId && o.kind === 'resource')
+    if (
+      o.entityId &&
+      o.kind === 'resource' &&
+      !workflowDetailRoles.has(o.role || '') &&
+      !o.workflowRunId
+    )
       edges.push({
         id: o.id + ':entity',
         kind: 'data_relation',
@@ -2760,8 +3460,13 @@ function projectGraph() {
       })
   }
   for (const run of visible.filter((o) => o.kind === 'workflow_run')) {
+    if (run.stage === 'concept') continue
     for (const input of run.inputs || [])
-      if (byId.has(input.id))
+      if (
+        byId.has(input.id) &&
+        (run.stage !== 'concept' ||
+          byId.get(input.id)?.role === 'concept_prompt')
+      )
         edges.push({
           id: `${run.id}:input:${input.id}`,
           kind: 'execution_relation',
@@ -2787,17 +3492,44 @@ function projectGraph() {
           fromId: run.id,
           toId: target.id
         })
+        if (run.stage === 'concept')
+          for (const assetId of run.parameters?.referenceAssetIds || []) {
+            const reference = visible.find(
+              (item) =>
+                item.kind === 'resource' &&
+                item.role === 'reference' &&
+                item.assetId === assetId
+            )
+            if (reference)
+              edges.push({
+                id: `${run.id}:reference:${reference.id}:output:${target.id}`,
+                kind: 'execution_relation',
+                revision: 1,
+                fromId: reference.id,
+                toId: target.id
+              })
+          }
       }
     }
   }
   const connected = new Set<string>()
+  const nextInputSlot = new Map<string, number>()
   for (const edge of edges) {
     const key = edge.fromId + ':' + edge.toId
     if (connected.has(key)) continue
     connected.add(key)
     const from = graph.getNodeById(toNodeId(edge.fromId)),
       to = graph.getNodeById(toNodeId(edge.toId))
-    if (from && to) from.connect(0, to, 0)
+    if (from && to) {
+      const inputSlot = nextInputSlot.get(edge.toId) || 0
+      if (inputSlot >= to.inputs.length) {
+        to.addInput('', '*')
+        const dimensions = nodeDimensions.get(edge.toId)
+        if (dimensions) to.size = [dimensions.width, dimensions.height]
+      }
+      if (from.connect(0, to, inputSlot))
+        nextInputSlot.set(edge.toId, inputSlot + 1)
+    }
   }
   canvas.setDirty(true, true)
 }
@@ -2861,7 +3593,7 @@ function projectAgentGraph() {
       ctx.clip()
       ctx.fillStyle = '#9eb4c4'
       ctx.font = '12px system-ui'
-      ctx.fillText(kindName(node.kind), 14, 42)
+      ctx.fillText(kindName(node.kind), 18, 42)
       ctx.fillStyle = '#d4e0e6'
       ctx.font = '12px system-ui'
       const preview = nodePreview(node)
@@ -2878,7 +3610,7 @@ function projectAgentGraph() {
       lines
         .slice(0, 4)
         .forEach((text, index) =>
-          ctx.fillText(text, 14, 72 + index * 17, n.size[0] - 28)
+          ctx.fillText(text, 18, 72 + index * 17, n.size[0] - 32)
         )
       ctx.restore()
     }
@@ -2935,6 +3667,7 @@ onMounted(async () => {
   canvas.read_only = true
   canvas.allow_interaction = false
   canvas.show_info = false
+  canvas.render_shadows = false
   canvas.min_font_size_for_lod = 0
   canvas.background_image = ''
   canvas.clear_background_color = '#101b25'
@@ -2972,6 +3705,86 @@ onMounted(async () => {
   resizeObserver = new ResizeObserver(resize)
   resizeObserver.observe(canvasHost.value!)
   window.addEventListener('resize', resize)
+  const dismiss = (event: PointerEvent) => {
+    if (
+      event.button === 0 &&
+      !(
+        event.target instanceof Element &&
+        event.target.closest('.node-context-menu')
+      )
+    )
+      contextMenu.value = null
+  }
+  dismissContextMenu = dismiss
+  window.addEventListener('pointerdown', dismiss, true)
+  canvasElement.value!.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (event.button !== 0) return
+      const [x, y] = canvas.convertEventToCanvasOffset(event)
+      const node = hitCanvasNode(graph.nodes, x, y)
+      if (!node) return
+      nodeDrag = {
+        node,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startPos: [node.pos[0], node.pos[1]],
+        moved: false
+      }
+      pointerStart = { x: event.clientX, y: event.clientY }
+      pointerDragged = false
+      contextMenu.value = null
+      canvasElement.value!.setPointerCapture(event.pointerId)
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    },
+    true
+  )
+  canvasElement.value!.addEventListener(
+    'pointermove',
+    (event) => {
+      if (!nodeDrag || nodeDrag.pointerId !== event.pointerId) return
+      const deltaX = event.clientX - nodeDrag.startX
+      const deltaY = event.clientY - nodeDrag.startY
+      if (Math.hypot(deltaX, deltaY) > 5) {
+        nodeDrag.moved = true
+        pointerDragged = true
+      }
+      if (nodeDrag.moved) {
+        nodeDrag.node.pos = [
+          nodeDrag.startPos[0] + deltaX / canvas.ds.scale,
+          nodeDrag.startPos[1] + deltaY / canvas.ds.scale
+        ]
+        canvas.setDirty(true, true)
+      }
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    },
+    true
+  )
+  canvasElement.value!.addEventListener(
+    'pointerup',
+    (event) => {
+      if (!nodeDrag || nodeDrag.pointerId !== event.pointerId) return
+      if (nodeDrag.moved) saveView()
+      nodeDrag = undefined
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    },
+    true
+  )
+  canvasElement.value!.addEventListener(
+    'pointercancel',
+    (event) => {
+      if (!nodeDrag || nodeDrag.pointerId !== event.pointerId) return
+      nodeDrag.node.pos = nodeDrag.startPos
+      nodeDrag = undefined
+      canvas.setDirty(true, true)
+      event.stopImmediatePropagation()
+    },
+    true
+  )
   canvasElement.value!.addEventListener('pointerdown', (event) => {
     clearTimeout(inspectTimer)
     if (event.button !== 2) contextMenu.value = null
@@ -2983,7 +3796,7 @@ onMounted(async () => {
     const [x, y] = canvas.convertEventToCanvasOffset(event)
     const node = hitCanvasNode(graph.nodes, x, y)
     const object = node && objectById(String(node.id))
-    if (!object) {
+    if (!object || !hasContextActions(object)) {
       contextMenu.value = null
       return
     }
@@ -3014,15 +3827,15 @@ onMounted(async () => {
         name: object.name || kindName(object.kind),
         help:
           canvasMode.value === 'agents'
-            ? '单击查看详情 · 右键使用快捷操作'
+            ? '拖动调整位置 · 单击查看详情 · 右键使用快捷操作'
             : object.kind === 'resource' &&
                 object.assetId &&
                 ['image', 'audio', 'video'].includes(object.type)
-              ? '单击查看详情 · 双击在画布中预览 · 右键查看操作'
+              ? '拖动调整位置 · 单击查看详情 · 双击预览 · 右键查看操作'
               : object.id !== focusId.value &&
                   canDrill(objects.value, object.id, showAllResources.value)
-                ? '单击查看详情 · 双击进入下级 · 右键启动工作流'
-                : '单击查看详情 · 右键查看可用操作'
+                ? '拖动调整位置 · 单击查看详情 · 双击进入下级 · 右键启动工作流'
+                : '拖动调整位置 · 单击查看详情 · 右键查看可用操作'
       }
     } else hoverTooltip.value = null
   })
@@ -3030,8 +3843,8 @@ onMounted(async () => {
     hoverTooltip.value = null
   })
   canvasElement.value!.addEventListener('click', (event) => {
+    if (event.button === 0) contextMenu.value = null
     if (pointerDragged || event.button !== 0) return
-    contextMenu.value = null
     const [x, y] = canvas.convertEventToCanvasOffset(event)
     const node = hitCanvasNode(graph.nodes, x, y)
     if (node) {
@@ -3061,7 +3874,6 @@ onMounted(async () => {
   window.addEventListener('pointerdown', mouseHistory, true)
   window.addEventListener('pointerup', mouseHistory, true)
   window.addEventListener('auxclick', mouseHistory, true)
-  poll = setInterval(() => void refreshAgent(), 5000)
   try {
     projects.value = await studioApi('/projects')
     definitions.value = await studioApi('/workflow-definitions')
@@ -3073,10 +3885,11 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', restoreRoute)
   window.removeEventListener('pointerdown', mouseHistory, true)
+  if (dismissContextMenu)
+    window.removeEventListener('pointerdown', dismissContextMenu, true)
   window.removeEventListener('pointerup', mouseHistory, true)
   window.removeEventListener('auxclick', mouseHistory, true)
   events?.close()
-  clearInterval(poll)
   clearTimeout(inspectTimer)
   clearTimeout(invalidGlowTimer)
   clearTimeout(viewTimer)
@@ -3248,7 +4061,8 @@ nav small {
   height: auto;
   min-height: 70px;
   flex-wrap: wrap;
-  padding-left: 420px;
+  /* Keep the project breadcrumb clear of the floating project picker above it. */
+  padding-left: 560px;
   padding-right: 12px;
 }
 .navigation-location {
@@ -3509,6 +4323,20 @@ nav small {
   display: block;
   width: 100%;
   text-align: left;
+}
+.inspector .conversation-link {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  margin: 8px 0;
+  padding: 10px;
+  text-align: left;
+}
+.conversation-link span,
+.empty-list {
+  color: #9eb4c4;
+  font-size: 11px;
 }
 .inspector .workspace-path-link {
   margin: 0;

@@ -30,7 +30,7 @@ test('PiWeb input binds context and takes pending authorization once; wrong sess
   const pi = new PiBridge(store, dir)
   assert.throws(
     () => pi.directInput('secret', { sessionId: 'foreign', text: 'x' }),
-    /mismatch/
+    /invalid session capability/
   )
   const turn = pi.directInput('secret', {
     sessionId: 'native',

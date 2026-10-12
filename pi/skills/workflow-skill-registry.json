@@ -1,0 +1,13 @@
+{
+  "owner": "Sean",
+  "common": "studio-workflow/SKILL.md",
+  "workflows": {
+    "StructureNovel": "novel-structure/SKILL.md",
+    "ExtractEntities": "chapter-entity-extraction/SKILL.md",
+    "CreateEntity": "entity-creation/SKILL.md",
+    "GenerateThreeView": "entity-creation/SKILL.md"
+  },
+  "references": {
+    "CreateEntity": ["entity-creation/references/qwen-image-2-1-prompting.md"]
+  }
+}

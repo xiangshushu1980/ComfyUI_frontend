@@ -54,6 +54,143 @@ test('novel chapters retain source ranges; resume Workflow and read latest conte
   )
   f.close()
 })
+test('canvas deletes persisted node kinds independently and only hides active Run nodes', () => {
+  const f = fixture(),
+    { store, workflows: w, project: p } = f
+  const entity = store.transaction(() =>
+    store.create(p.id, 'entity', {
+      name: '齿轮',
+      type: 'prop',
+      description: '黄铜齿轮'
+    })
+  )
+  const asset = store.transaction(() =>
+    store.create(p.id, 'asset', {
+      runId: 'finished-concept-run',
+      hash: 'b'.repeat(64),
+      mime: 'image/png',
+      sourceAssetIds: []
+    })
+  )
+  const finishedRun = store.transaction(() =>
+    store.create(p.id, 'workflow_run', {
+      targetEntityId: entity.id,
+      stage: 'concept',
+      status: 'succeeded'
+    })
+  )
+  store.transaction(() =>
+    store.update(asset.id, asset.revision, { runId: finishedRun.id })
+  )
+  const brief = store.transaction(() =>
+    store.create(p.id, 'resource', {
+      entityId: entity.id,
+      role: 'concept_brief',
+      type: 'text',
+      text: '独立设计说明',
+      status: 'available'
+    })
+  )
+  const prompt = store.transaction(() =>
+    store.create(p.id, 'resource', {
+      entityId: entity.id,
+      role: 'concept_prompt',
+      type: 'text',
+      text: 'independent prompt',
+      sourceResourceIds: [brief.id],
+      status: 'available'
+    })
+  )
+  const image = store.transaction(() =>
+    store.create(p.id, 'resource', {
+      entityId: entity.id,
+      role: 'concept',
+      type: 'image',
+      assetId: asset.id,
+      sourceResourceIds: [brief.id, prompt.id],
+      status: 'candidate'
+    })
+  )
+
+  w.removeCanvasNode(p.id, brief.id, { expectedRevision: brief.revision })
+  assert.equal(store.get(brief.id).status, 'removed')
+  assert.equal(store.get(prompt.id).status, 'available')
+  assert.equal(store.get(image.id).status, 'candidate')
+
+  w.removeCanvasNode(p.id, prompt.id, { expectedRevision: prompt.revision })
+  assert.equal(store.get(prompt.id).status, 'removed')
+  assert.equal(store.get(image.id).status, 'candidate')
+
+  w.removeCanvasNode(p.id, image.id, { expectedRevision: image.revision })
+  assert.equal(store.get(image.id).status, 'removed')
+
+  const activeRun = store.transaction(() =>
+    store.create(p.id, 'workflow_run', { stage: 'concept', status: 'running' })
+  )
+  const hidden = w.removeCanvasNode(p.id, activeRun.id, {
+    expectedRevision: activeRun.revision
+  })
+  assert.equal(hidden.status, 'running')
+  assert.equal(hidden.canvasHidden, true)
+
+  const extensionNode = store.transaction(() =>
+    store.create(p.id, 'custom_canvas_node', { status: 'available' })
+  )
+  w.removeCanvasNode(p.id, extensionNode.id, {
+    expectedRevision: extensionNode.revision
+  })
+  assert.equal(store.get(extensionNode.id).status, 'removed')
+  assert.throws(() =>
+    w.removeCanvasNode(p.id, p.id, { expectedRevision: p.revision })
+  )
+
+  f.close()
+})
+test('editing concept description invalidates its prompt until the prompt is refreshed', () => {
+  const f = fixture(),
+    { store, workflows: w, project: p } = f
+  const entity = store.transaction(() =>
+    store.create(p.id, 'entity', { name: '测试实体', type: 'character' })
+  )
+  const brief = store.transaction(() =>
+    store.create(p.id, 'resource', {
+      entityId: entity.id,
+      role: 'concept_brief',
+      type: 'text',
+      text: '旧设计说明',
+      conceptPlanId: 'plan:test',
+      status: 'available'
+    })
+  )
+  const prompt = store.transaction(() =>
+    store.create(p.id, 'resource', {
+      entityId: entity.id,
+      role: 'concept_prompt',
+      type: 'text',
+      text: 'old prompt',
+      sourceResourceIds: [brief.id],
+      conceptPlanId: brief.conceptPlanId,
+      status: 'available'
+    })
+  )
+
+  w.updateEntityResource(p.id, entity.id, {
+    resourceId: brief.id,
+    expectedRevision: brief.revision,
+    fields: { text: '更新后的设计说明' }
+  })
+  assert.equal(store.get(prompt.id).status, 'needs_refresh')
+
+  const stalePrompt = store.get(prompt.id)
+  w.updateEntityResource(p.id, entity.id, {
+    resourceId: prompt.id,
+    expectedRevision: stalePrompt.revision,
+    fields: { text: 'refreshed prompt' }
+  })
+  assert.equal(store.get(prompt.id).text, 'refreshed prompt')
+  assert.equal(store.get(prompt.id).status, 'available')
+  f.close()
+})
 test('chapter extraction supports individual human adoption and stable relationship endpoint mapping', () => {
   const f = fixture(),
     { store, workflows: w, project: p } = f
@@ -104,83 +241,35 @@ test('chapter extraction supports individual human adoption and stable relations
   )
   f.close()
 })
-test('bounded parallel concepts, durable provenance, confirmation-triggered serial threeview and no duplicate replay', () => {
-  const f = fixture(),
-    { store, workflows: w, project: p, execution } = f
-  const entity = store.transaction(() =>
-    store.create(p.id, 'entity', {
-      name: '林乔',
-      type: 'character',
-      description: '黑色短发'
+test('concept planning never submits; canvas generation is bounded, idempotent and does not start deferred stages', () => {
+  const f = fixture(), { store, workflows: w, project: p } = f
+  try {
+    const entity = store.transaction(() => store.create(p.id, 'entity', { name: '林乔', type: 'character', description: '黑色短发' }))
+    const s = store.transaction(() => w.open(p.id, { workflowId: 'CreateEntity', targetId: entity.id, goal: '概念图生成' }))
+    store.transaction(() => w.authorize(s.id, { confirmed: true, conceptCount: 1, threeView: false }))
+    const plan = w.operate(s.id, 'prepare_concept', { requestId: 'plan', confirmedPlan: true, description: '半身人物', prompt: 'Portrait of a woman with short black hair.', visualStyle: '电影写实', referenceIds: [] })
+    assert.equal(store.list(p.id, 'run').length, 0)
+    assert.equal(store.list(p.id, 'workflow_run').length, 0)
+    assert.throws(() => w.operate(s.id, 'generate_concept', { requestId: 'agent-submit' }), /outside current Workflow/)
+    const request = { requestId: 'canvas-submit', confirmedPlan: true, briefResourceId: plan.brief.id, promptResourceId: plan.prompt.id, expectedBriefRevision: plan.brief.revision, expectedPromptRevision: plan.prompt.revision }
+    const run = store.write('canvas-concept', request, () => w.generateConceptFromPlan(s.id, request))
+    assert.equal(run.childRunIds.length, 1)
+    assert.equal(store.write('canvas-concept', request, () => w.generateConceptFromPlan(s.id, request)).id, run.id)
+    let asset
+    store.transaction(() => {
+      asset = store.create(p.id, 'asset', { runId: run.childRunIds[0], hash: 'a'.repeat(64), mime: 'image/png', sourceAssetIds: [] })
+      const child = store.get(run.childRunIds[0])
+      store.update(child.id, child.revision, { status: 'succeeded', outputs: [asset.id] })
     })
-  )
-  const s = store.transaction(() =>
-    w.open(p.id, { workflowId: 'CreateEntity', targetId: entity.id })
-  )
-  assert.throws(
-    () => w.operate(s.id, 'generate_concepts', { requestId: 'no-grant' }),
-    /authorization/
-  )
-  store.transaction(() =>
-    w.authorize(s.id, { confirmed: true, conceptCount: 2, threeView: true })
-  )
-  const request = { requestId: 'concepts', seed: 42 }
-  const run = w.operate(s.id, 'generate_concepts', request)
-  assert.equal(run.childRunIds.length, 2)
-  assert.equal(w.operate(s.id, 'generate_concepts', request).id, run.id)
-  assert.throws(
-    () =>
-      w.operate(s.id, 'generate_concepts', { requestId: 'extra', count: 1 }),
-    /authorization/
-  )
-  let asset
-  store.transaction(() => {
-    for (const id of run.childRunIds) {
-      asset = store.create(p.id, 'asset', {
-        runId: id,
-        hash: 'a'.repeat(64),
-        mime: 'image/png',
-        sourceAssetIds: []
-      })
-      store.update(id, 1, { status: 'succeeded', outputs: [asset.id] })
-    }
-  })
-  w.sync()
-  assert.equal(store.get(run.id).status, 'waiting_confirmation')
-  assert.equal(store.list(p.id, 'resource').length, 2)
-  w.sync()
-  assert.equal(store.list(p.id, 'resource').length, 2)
-  const decision = store.write('appearance', { requestId: 'choose' }, () =>
-    w.confirmAppearance(entity.id, { assetId: asset.id, expectedRevision: 1 })
-  )
-  assert.equal(decision.actor, 'human')
-  const downstream = store
-    .list(p.id, 'workflow_run')
-    .find((r) => r.stage === 'threeview')
-  assert.equal(downstream.parentRunId, run.id)
-  const low = store.get(downstream.childRunIds[0])
-  assert.equal(low.inputSnapshot.input.references[0].assetId, asset.id)
-  assert.match(
-    low.inputSnapshot.input.prompt,
-    /Front View, Clean Side Profile, and Back View/
-  )
-  assert.equal(low.workflow.nodes.length, 10)
-  assert.equal(
-    low.workflow.nodes.find((n) => n.type === 'KSampler').widgets_values_named
-      .control_after_generate,
-    'fixed'
-  )
-  assert.equal(
-    store.list(p.id, 'data_relation').some((r) => r.fromId === run.id),
-    false
-  )
-  execution.update(low.id, { status: 'submission_unknown' })
-  w.sync()
-  assert.equal(store.get(downstream.id).status, 'submission_unknown')
-  execution.update(low.id, { status: 'succeeded', outputs: [] })
-  w.sync()
-  assert.equal(store.get(downstream.id).status, 'succeeded')
-  f.close()
+    w.sync()
+    const outputCount = store.list(p.id, 'resource').length
+    const resource = store.list(p.id, 'resource').find(r => r.assetId === asset.id)
+    assert.ok(resource.sourceResourceIds.includes(plan.brief.id))
+    w.sync()
+    assert.equal(store.list(p.id, 'resource').length, outputCount)
+    store.transaction(() => w.confirmAppearance(entity.id, { assetId: asset.id, expectedRevision: store.get(entity.id).revision }))
+    assert.equal(store.list(p.id, 'workflow_run').some(r => ['threeview', 'voice'].includes(r.stage)), false)
+  } finally { f.close() }
 })
 test('legacy chapter identity survives migration and rerunning migration is harmless', () => {
   const f = fixture(),

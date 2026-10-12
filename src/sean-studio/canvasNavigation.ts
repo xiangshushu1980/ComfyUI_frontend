@@ -6,6 +6,7 @@ export type CanvasObject = {
   text?: string
   sourceId?: string
   parentId?: string
+  stage?: string
   chapterId?: string
   entityId?: string
   start?: number
@@ -132,11 +133,23 @@ export function projectScope<T extends CanvasObject>(
       )
     )
       related.add(entity.id)
+  // A chapter view reaches entities through mention relations, but it must
+  // stop at those entity nodes. Entity-owned references and generated media
+  // belong to the entity drill-down view.
+  const entityBoundaries = new Set(
+    objects
+      .filter(
+        (o) =>
+          o.kind === 'entity' && (descendants.has(o.id) || related.has(o.id))
+      )
+      .map((o) => o.id)
+  )
   // Retain the current node as context; hide only its ancestors.
   const excluded = new Set(
     scope ? objectPath(scope.id, parents).slice(0, -1) : []
   )
   return objects.filter((o) => {
+    if (o.kind === 'resource' && o.status === 'removed') return false
     if (excluded.has(o.id) || o.supersededBy) return false
     if (scope && o.id === scope.id) return true
     if (o.kind === 'proposal')
@@ -149,6 +162,11 @@ export function projectScope<T extends CanvasObject>(
         return scope.outputs?.includes(o.assetId || '') || false
       if (scope?.kind === 'entity')
         return o.entityId === scope.id || descendants.has(o.id)
+      if (scope && o.entityId && entityBoundaries.has(o.entityId)) return false
+      // Entity-owned references and generated media are visible only after
+      // entering that entity. The project root stays focused on chapters and
+      // entities, even when generated images have the concept/threeview roles.
+      if (!scope && o.entityId) return false
       return (
         (!scope || descendants.has(o.id) || related.has(o.entityId || '')) &&
         (showAllResources || ['concept', 'threeview'].includes(o.role || ''))

@@ -57,6 +57,12 @@ function handleResourceError(url: string, tagName: string) {
 }
 
 onMounted(() => {
+  // Owner: Sean. The initial spinner state is false, so the watcher below may never see a
+  // true -> false transition on direct routes (including the Studio canvas).
+  // Once Vue has mounted the application shell, don't leave the static splash
+  // overlay covering an already-rendered route.
+  if (!isLoading.value) document.getElementById('splash-loader')?.remove()
+
   window['__COMFYUI_FRONTEND_VERSION__'] = config.app_version
 
   if (isDesktop) {

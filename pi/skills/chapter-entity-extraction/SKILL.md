@@ -13,6 +13,10 @@ Create a small, reviewable proposal for one selected chapter in any novel projec
 
 This v1 covers one selected chapter at a time. `read_chapter` pagination only retrieves the rest of that same chapter when the tool response is paged. Do not design or attempt advanced long-text chunking, cross-chunk entity merging, or cross-chapter identity resolution yet. If a chapter is too long to analyze reliably as one unit, pause and ask the user to narrow the scope; revisit a larger-text workflow when the screenplay grows.
 
+## Startup
+
+When a fresh `ExtractEntities` conversation opens, immediately identify the selected chapter from Workflow context, report its name/source and whether entity candidates already exist for this chapter, then execute the extraction process below. The user's explicit start of this Workflow authorizes creating a reviewable proposal. Do not wait for another generic “please begin” message. Candidate adoption remains a separate human action. If there is no unambiguous selected chapter, report what is missing and ask the user to select one.
+
 ## Read before extracting
 
 1. Call `catalog` and `context`. Confirm the active workflow is `ExtractEntities` and identify the selected chapter from the workflow context/index.

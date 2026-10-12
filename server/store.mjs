@@ -68,6 +68,27 @@ export class Store {
     requireThat(p, 'project not found', 404)
     return JSON.parse(p.body)
   }
+  updateProjectSettings(id, expectedRevision, settings) {
+    const current = this.project(id)
+    requireThat(
+      current.revision === expectedRevision,
+      'project settings changed; reload project context',
+      409
+    )
+    const updated = {
+      ...current,
+      settings: { ...(current.settings || {}), ...settings },
+      revision: current.revision + 1
+    }
+    this.db
+      .prepare('UPDATE projects SET body=? WHERE id=?')
+      .run(JSON.stringify(updated), id)
+    this.event(id, 'project.settings_updated', {
+      revision: updated.revision,
+      settings: updated.settings
+    })
+    return updated
+  }
   createProject(body) {
     const p = {
       id: uuid(),

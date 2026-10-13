@@ -26,7 +26,7 @@ export type CanvasObject = {
   outputs?: string[]
 }
 export type CanvasRoute = { projectId: string; path: string[] }
-export function chapterHierarchy(objects: CanvasObject[]) {
+function chapterHierarchy(objects: CanvasObject[]) {
   const byId = new Map(objects.map((o) => [o.id, o]))
   const parents = new Map<string, string>()
   const stacks = new Map<string, { id: string; level: number }[]>()
@@ -67,11 +67,7 @@ export function objectHierarchy(objects: CanvasObject[]) {
   }
   return parents
 }
-export function isWithin(
-  id: string,
-  ancestor: string,
-  parents: Map<string, string>
-) {
+function isWithin(id: string, ancestor: string, parents: Map<string, string>) {
   const seen = new Set<string>()
   while (id && !seen.has(id)) {
     if (id === ancestor) return true

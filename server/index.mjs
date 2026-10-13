@@ -650,6 +650,15 @@ export function createStudioServer({
           return send(snap)
         }
         if (
+          (m = path.match(/^\/projects\/([^/]+)\/visual-style$/)) &&
+          req.method === 'PATCH'
+        ) {
+          const b = await readBody(req)
+          return send(
+            store.write(path, b, () => workflows.updateProjectStyle(m[1], b))
+          )
+        }
+        if (
           (m = path.match(/^\/projects\/([^/]+)\/pi-sync$/)) &&
           req.method === 'POST'
         ) {

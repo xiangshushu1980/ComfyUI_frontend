@@ -2,26 +2,39 @@
 <template>
   <div class="workspace">
     <div class="floating-brand">
-      <span class="brand-mark" aria-hidden="true">◈</span>
-      <span class="brand-project">创作图谱</span>
-      <select
-        v-model="projectId"
-        :disabled="navigationBusy"
-        aria-label="切换创作工程"
-        @change="openProject"
+      <button
+        type="button"
+        class="project-menu-trigger"
+        title="打开或新建工程"
+        :aria-expanded="projectMenuOpen"
+        @click="projectMenuOpen = !projectMenuOpen"
       >
-        <option value="">选择创作工程</option>
-        <option v-for="p in projects" :key="p.id" :value="p.id">
-          {{ p.name }}
-        </option>
-      </select>
-      <button type="button" title="新建创作工程" @click="newProject">＋</button>
+        ＋
+      </button>
+      <div v-if="projectMenuOpen" class="project-menu" @pointerdown.stop>
+        <select
+          v-model="projectId"
+          :disabled="navigationBusy"
+          aria-label="打开工程"
+          @change="
+            projectMenuOpen = false
+            openProject()
+          "
+        >
+          <option value="">打开工程…</option>
+          <option v-for="p in projects" :key="p.id" :value="p.id">
+            {{ p.name }}
+          </option>
+        </select>
+        <button type="button" @click="newProject">新建工程 ＋</button>
+      </div>
     </div>
     <main>
       <nav class="canvas-navigation" aria-label="画布导航">
         <div class="navigation-location">
-          <div v-if="canvasMode === 'agents'" class="agent-view-heading">
-            {{ project?.name || '创作工程' }} / Agent 运行监控
+          <div v-if="canvasMode === 'agents'" class="breadcrumbs">
+            <button type="button" @click="toggleCanvasMode">创作图谱</button>
+            <span>/</span><span>Agent 运行监控</span>
           </div>
           <div v-else class="breadcrumbs" aria-label="当前位置">
             <button
@@ -70,6 +83,12 @@
             {{ showAllResources ? '收起次要素材' : '展开全部素材' }}
           </button>
           <button @click="fit">适配画布</button>
+          <button
+            :aria-expanded="settingsOpen"
+            @click="settingsOpen = !settingsOpen"
+          >
+            设置
+          </button>
         </div>
       </nav>
       <div v-if="canvasMode === 'agents' && syncMessage" class="sync-message">
@@ -84,6 +103,109 @@
           @change="uploadReference"
         />
         <canvas ref="canvasElement" />
+        <div
+          v-if="settingsOpen"
+          class="canvas-settings"
+          role="region"
+          aria-label="画布设置"
+          @pointerdown.stop
+        >
+          <header>
+            <strong>画布设置</strong>
+            <button aria-label="关闭设置" @click="settingsOpen = false">
+              ×
+            </button>
+          </header>
+          <label>
+            节点内边距
+            <input
+              v-model.number="canvasSettings.nodePadding"
+              type="range"
+              min="4"
+              max="20"
+              step="1"
+              @input="applyCanvasSettings"
+            />
+            <span>{{ canvasSettings.nodePadding }} px</span>
+          </label>
+          <label class="settings-toggle">
+            Agent / Workflow 标记
+            <input
+              v-model="canvasSettings.showCapabilityBadges"
+              type="checkbox"
+              @change="applyCanvasSettings"
+            />
+            <span>{{
+              canvasSettings.showCapabilityBadges ? '显示' : '隐藏'
+            }}</span>
+          </label>
+          <label>
+            连线样式
+            <select
+              v-model="canvasSettings.linkStyle"
+              @change="applyCanvasSettings"
+            >
+              <option value="spline">曲线</option>
+              <option value="linear">直角折线</option>
+              <option value="straight">直线</option>
+            </select>
+          </label>
+          <label>
+            连线中点
+            <select
+              v-model="canvasSettings.linkMarker"
+              @change="applyCanvasSettings"
+            >
+              <option value="circle">圆点（点击打开连线菜单）</option>
+              <option value="arrow">方向箭头</option>
+              <option value="none">隐藏</option>
+            </select>
+          </label>
+          <label>
+            连线颜色
+            <input
+              v-model="canvasSettings.linkColor"
+              type="color"
+              @input="applyCanvasSettings"
+            />
+          </label>
+          <label>
+            连线宽度
+            <input
+              v-model.number="canvasSettings.linkWidth"
+              type="range"
+              min="1"
+              max="12"
+              step="0.5"
+              @input="applyCanvasSettings"
+            />
+            <span>{{ canvasSettings.linkWidth }} px</span>
+          </label>
+          <label>
+            属性面板透明度
+            <input
+              v-model.number="canvasSettings.panelOpacity"
+              type="range"
+              min="0.35"
+              max="1"
+              step="0.05"
+              @input="applyCanvasSettings"
+            />
+            <span>{{ Math.round(canvasSettings.panelOpacity * 100) }}%</span>
+          </label>
+          <label>
+            属性面板宽度
+            <input
+              v-model.number="inspectorWidth"
+              type="range"
+              min="360"
+              max="1200"
+              step="20"
+              @input="saveInspectorWidth"
+            />
+            <span>{{ inspectorWidth }} px</span>
+          </label>
+        </div>
         <div
           v-if="mediaPreview"
           class="media-preview"
@@ -153,7 +275,6 @@
           </button>
         </div>
         <div v-if="canvasMode === 'story' && runs.length" class="run-overlay">
-          <span>{{ visibleRunCount }} 个运行节点</span>
           <button @click="showHistory = !showHistory">
             {{ showHistory ? '隐藏已完成' : '显示历史运行' }}
           </button>
@@ -209,7 +330,11 @@
               "
               @click="generateConceptFromBrief(contextNode)"
             >
-              {{ conceptGenerating ? '提交中…' : '按此说明生成概念图' }}
+              {{
+                conceptGenerating
+                  ? '提交中…'
+                  : `按概念图 ${conceptBranchId(contextNode)} 生成`
+              }}
             </button>
           </template>
           <button
@@ -229,17 +354,33 @@
         </div>
         <div class="legend">
           <template v-if="canvasMode === 'agents'">
+            <template v-if="canvasSettings.showCapabilityBadges">
+              A Agent 对话 · W Workflow ·
+            </template>
             Studio / Pi 项目包含 Workflow · 每个 Workflow 连接自己的多个对话 ·
             Pi 工作目录在项目属性中查看
           </template>
           <template v-else>
+            <template v-if="canvasSettings.showCapabilityBadges">
+              A Agent 对话 · W Workflow ·
+            </template>
             右键节点启动工作流 · 活动运行显示为节点 · 已完成运行可展开历史
           </template>
         </div>
       </div>
-      <section v-if="selected" class="inspector">
+      <section
+        v-if="selected"
+        ref="inspectorElement"
+        class="inspector"
+        :class="{ 'inspector-source': selected.kind === 'source' }"
+        :style="{
+          width: `${inspectorWidth}px`,
+          backgroundColor: `rgba(22, 40, 52, ${canvasSettings.panelOpacity})`
+        }"
+        @pointerup.capture="persistInspectorWidth"
+      >
         <div class="inspector-head">
-          <span>{{ kindName(selected.kind) }} · v{{ selected.revision }}</span
+          <span>{{ kindName(selected.kind) }}</span
           ><button @click="selected = null">×</button>
         </div>
         <h2
@@ -264,6 +405,8 @@
         <p
           v-if="
             selected.kind !== 'entity' &&
+            Boolean(selected.description || selected.brief) &&
+            (selected.description || selected.brief) !== selected.preview &&
             !(
               selected.kind === 'resource' &&
               [
@@ -278,26 +421,57 @@
             )
           "
         >
-          {{ selected.description || selected.brief }}
+          {{
+            (selected.description || selected.brief) !== selected.preview
+              ? selected.description || selected.brief
+              : ''
+          }}
         </p>
+        <h2 v-if="selected.kind === 'entity'">
+          {{ selected.name }}
+          <small
+            v-if="selected.flags?.includes('ai-created')"
+            class="entity-origin-badge"
+            >AI 创建</small
+          >
+        </h2>
+        <template v-if="selected.kind === 'project_style'">
+          <p v-if="!selected.confirmed">
+            首次设置：请确认或调整此项目统一风格。后续图片与视频生成都会沿用。
+          </p>
+          <label>
+            风格预设
+            <select
+              v-model="projectStylePresetId"
+              @change="selectProjectStylePreset"
+            >
+              <option
+                v-for="preset in projectStylePresets"
+                :key="preset.id"
+                :value="preset.id"
+              >
+                {{ preset.name }}
+              </option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          <label>
+            风格提示词
+            <textarea
+              v-model="projectStyleText"
+              @change="saveCustomProjectStyle"
+            />
+          </label>
+          <button
+            v-if="!selected.confirmed"
+            class="primary"
+            @click="adoptDefaultProjectStyle"
+          >
+            采用建议风格
+          </button>
+          <small v-else>已应用于后续生成</small>
+        </template>
         <template v-if="selected.kind === 'agent_project'">
-          <p>
-            一个影片工程对应一个 Studio / Pi 项目根节点；Pi
-            工作目录作为项目属性管理。
-          </p>
-          <p>
-            {{ selected.workflowCount }} 个 Workflow ·
-            {{ selected.conversationCount }} 个对话
-          </p>
-          <h3>全局画风</h3>
-          <p>
-            {{
-              (typeof project?.settings?.visualStyle === 'string'
-                ? project.settings.visualStyle
-                : project?.settings?.visualStyle?.text) ||
-              '尚未确认；概念图 Agent 会先询问'
-            }}
-          </p>
           <h3>Pi 工作目录</h3>
           <p v-if="!selected.workspaces.length">首次创建对话后自动建立。</p>
           <div
@@ -328,10 +502,8 @@
         </template>
         <template v-if="selected.kind === 'workflow_agent'">
           <p>
-            {{ selected.workflowId }} ·
-            {{ selected.target === 'entity' ? '实体级工作流' : '工程级工作流' }}
+            {{ selected.target === 'entity' ? '实体级' : '工程级' }}
           </p>
-          <p>{{ selected.sessionCount }} 个独立对话</p>
           <h3>最近运行</h3>
           <button
             v-for="run in workflowRuns(selected.workflowId)"
@@ -368,27 +540,6 @@
               <small v-else>可新建对话，让 Agent 检查并调整分章</small>
             </div>
           </template>
-          <div v-for="workspaceId in selected.workspaceIds" :key="workspaceId">
-            <p>
-              运行目录：
-              <button
-                class="workspace-path-link"
-                :disabled="
-                  navigationBusy || !hasAgentWorkspaceBinding(workspaceId)
-                "
-                @click="openAgentWorkspaceInExplorer(workspaceId)"
-              >
-                {{ agentWorkspaceLabel(workspaceId) }} ↗
-              </button>
-            </p>
-            <button
-              :disabled="!hasAgentWorkspaceBinding(workspaceId)"
-              @click="copyAgentWorkspacePath(workspaceId)"
-            >
-              复制路径
-            </button>
-          </div>
-          <p v-if="!selected.workspaceIds.length">运行目录：尚未关联工作区</p>
           <label v-if="selected.target === 'entity' && !selected.deprecated"
             >目标实体
             <select v-model="workflowTargets[selected.workflowId]">
@@ -411,7 +562,6 @@
           </button>
         </template>
         <template v-if="selected.kind === 'workflow_conversation'">
-          <p v-if="selected.goal">目标：{{ selected.goal }}</p>
           <button
             :disabled="navigationBusy"
             @click="openAgentConversation(selected)"
@@ -442,23 +592,11 @@
         >
           {{ agentError }}
         </p>
-        <template v-if="selected.kind === 'chapter'"
-          ><p>
-            原文 {{ selected.sourceId }} · {{ selected.anchorIds?.join(' · ') }}
-          </p>
-          <pre>{{ chapterText(selected) }}</pre>
-        </template>
         <template v-if="selected.kind === 'source'">
-          <p>
-            原文来源 · {{ selected.anchors?.length }} 段。章节识别与调整请在
-            “小说导入与分章”工作流中操作。
-          </p>
+          <p>{{ selected.anchors?.length }} 个来源段落</p>
+          <pre class="source-text">{{ selected.text }}</pre>
         </template>
         <template v-if="selected.kind === 'entity'">
-          <label>实体描述<textarea v-model="entityDescription" /></label>
-          <button class="primary" @click="saveEntityDetails">
-            保存实体信息
-          </button>
           <h3>出现章节</h3>
           <button
             v-for="chapter in entityChapters(selected)"
@@ -467,11 +605,11 @@
           >
             {{ chapter.name }} ↗
           </button>
-          <p>正式形象：{{ selected.appearanceAssetId || '尚未确认' }}</p>
-          <button @click="selectEntityIntroduction(selected)">
-            查看实体介绍节点 ↗
-          </button>
           <h3>Pi Agent 对话</h3>
+          <button :disabled="navigationBusy" @click="syncPiProject">
+            {{ navigationBusy ? '刷新中…' : '从 PiWeb 刷新对话' }}
+          </button>
+          <p v-if="piSyncMessage" role="status">{{ piSyncMessage }}</p>
           <div
             v-if="!entityAgentConversations(selected.id).length"
             class="empty-list"
@@ -490,12 +628,6 @@
           </button>
         </template>
         <template v-if="selected.kind === 'proposal_item'">
-          <p>
-            候选来自
-            {{
-              selected.chapterName || '未关联章节'
-            }}。逐项确认后才会成为正式实体。
-          </p>
           <button
             v-if="selected.chapterId"
             @click="selectId(selected.chapterId)"
@@ -568,9 +700,7 @@
               ].includes(selected.role)
             "
             >{{ selected.text }}</pre>
-          <p>
-            {{ kindName(selected.role) }} · {{ statusName(selected.status) }}
-          </p>
+          <p>{{ statusName(selected.status) }}</p>
           <template
             v-if="
               [
@@ -585,27 +715,50 @@
             "
           >
             <label v-if="selected.role === 'reference'"
-              >这张图/素材参考什么<textarea v-model="resourceDescription" />
+              >这张图/素材参考什么<textarea
+                v-model="resourceDescription"
+                @change="saveResourceDetails(selected)"
+              />
             </label>
+            <small
+              v-if="
+                selected.role === 'reference' &&
+                selected.type === 'image' &&
+                !selected.description?.trim()
+              "
+              >填写备注后自动保存；保存后才会作为参考输入。</small
+            >
             <label
               v-if="selected.role === 'reference' && selected.type === 'text'"
-              >参考内容<textarea v-model="resourceText" />
+              >参考内容<textarea
+                v-model="resourceText"
+                @change="saveResourceDetails(selected)"
+              />
             </label>
             <label v-if="selected.role === 'entity_introduction'"
-              >实体介绍<textarea v-model="resourceText" />
+              >实体介绍<textarea
+                v-model="resourceText"
+                @change="saveResourceDetails(selected)"
+              />
             </label>
             <label v-if="selected.role === 'concept_brief'"
-              >概念图设计说明<textarea v-model="resourceText" />
+              >概念图设计说明<textarea
+                v-model="resourceText"
+                @change="saveResourceDetails(selected)"
+              />
             </label>
             <label v-if="selected.role === 'threeview_brief'"
-              >三视图设计说明<textarea v-model="resourceText" />
+              >三视图设计说明<textarea
+                v-model="resourceText"
+                @change="saveResourceDetails(selected)"
+              />
             </label>
             <label v-if="selected.role.endsWith('_prompt')"
-              >生成提示词<textarea v-model="resourceText" />
+              >生成提示词<textarea
+                v-model="resourceText"
+                @change="saveResourceDetails(selected)"
+              />
             </label>
-            <button class="primary" @click="saveResourceDetails(selected)">
-              保存并更新画布节点
-            </button>
             <button
               v-if="selected.role === 'concept_brief'"
               @click="askAgentToRefreshConceptPrompt(selected)"
@@ -615,8 +768,16 @@
             <p
               v-if="
                 selected.role === 'concept_brief' &&
-                latestConceptPlan(selected.entityId)?.prompt.status ===
-                  'needs_refresh'
+                !conceptPlanForBrief(selected).prompt
+              "
+              class="error"
+            >
+              此设计分支没有配对提示词，不能生成概念图。请从实体节点重新开启“概念图生成”对话，整理并确认新的设计方案。
+            </p>
+            <p
+              v-else-if="
+                selected.role === 'concept_brief' &&
+                conceptPlanForBrief(selected).prompt?.status === 'needs_refresh'
               "
               class="error"
             >
@@ -667,11 +828,11 @@
             对应 Pi 对话暂不可验证
           </button>
           <button
-            v-else
+            v-else-if="canStartResourceAgentConversation(selected)"
             :disabled="navigationBusy"
             @click="startResourceConversation(selected)"
           >
-            为此图片新建 Pi 对话 ＋
+            新建相关 Agent 对话 ＋
           </button>
         </template>
         <template v-if="selected.kind === 'workflow_run'"
@@ -735,10 +896,12 @@
           >
             查看底层固定流程
           </button>
-          <h3>输入 · Workflow v{{ selected.definitionVersion }}</h3>
-          <pre>{{ JSON.stringify(selected.inputs, null, 2) }}</pre>
-          <h3>参数与实际输出</h3>
-          <pre>{{ JSON.stringify(selected.parameters, null, 2) }}</pre>
+          <template v-if="selected.status !== 'awaiting_input_confirmation'">
+            <h3>输入 · Workflow v{{ selected.definitionVersion }}</h3>
+            <pre>{{ JSON.stringify(selected.inputs, null, 2) }}</pre>
+            <h3>参数与实际输出</h3>
+            <pre>{{ JSON.stringify(selected.parameters, null, 2) }}</pre>
+          </template>
           <button
             v-for="id in selected.outputs"
             :key="id"
@@ -790,7 +953,19 @@
         @error="showError"
       />
     </div>
-    <div v-if="error" class="toast" @click="error = ''">{{ error }} ×</div>
+    <div v-if="notice" class="toast notice" role="status">
+      <span>{{ notice }}</span>
+      <button
+        v-if="pendingAgentCanvasEntityId"
+        @click="openAgentConceptInCanvas"
+      >
+        查看设计节点
+      </button>
+      <button aria-label="关闭提示" @click="dismissCanvasNotice">×</button>
+    </div>
+    <div v-if="error" class="toast" role="alert" @click="error = ''">
+      {{ error }} ×
+    </div>
   </div>
 </template>
 <script setup lang="ts">
@@ -802,6 +977,10 @@ import {
   LGraphNode,
   LiteGraph
 } from '@/lib/litegraph/src/litegraph'
+import {
+  LinkMarkerShape,
+  LinkRenderType
+} from '@/lib/litegraph/src/types/globalEnums'
 import type { Rect } from '@/lib/litegraph/src/interfaces'
 import { toNodeId } from '@/types/nodeId'
 import NativeWorkflow from './NativeWorkflow.vue'
@@ -840,6 +1019,86 @@ const projects = ref<Obj[]>([]),
       ''
   ),
   selected = ref<Obj | null>(null)
+const defaultProjectStyle =
+  '电影感写实，真实材质与自然光，统一色彩和镜头质感；保持角色与物体设定一致，不添加未指定元素。'
+const projectStylePresets = [
+  {
+    id: 'cinematic_realism',
+    name: '电影写实',
+    prompt: defaultProjectStyle
+  },
+  {
+    id: 'japanese_animation',
+    name: '日系动画',
+    prompt:
+      '日系动画电影风格，清晰而富有表现力的线条，细腻赛璐璐上色，柔和层次的色彩与光影；角色造型、服装、发型和配色保持一致，背景具有手绘质感，构图富有电影感，动作自然流畅，不添加未指定元素。'
+  },
+  {
+    id: '2d_animation',
+    name: '2D 手绘动画',
+    prompt:
+      '二维手绘动画风格，干净流畅的轮廓线，富有设计感的形状与色块，经典赛璐璐阴影，色彩明快且统一；角色比例、造型和服饰保持一致，画面简洁易读，动作具有清楚的姿势变化与自然节奏，不添加未指定元素。'
+  },
+  {
+    id: 'stylized_3d_animation',
+    name: '3D 动画',
+    prompt:
+      '高品质风格化 3D 动画电影画面，造型简洁生动，材质细腻，柔和全局光照与富有层次的色彩；角色五官、比例、服装和材质保持一致，空间与光线连续，动作连贯自然，避免写实摄影感，不添加未指定元素。'
+  },
+  {
+    id: 'watercolor_illustration',
+    name: '水彩手绘',
+    prompt:
+      '水彩手绘插画风格，透明颜料叠色、柔和晕染与可见纸张纹理，边缘自然松动，色彩清透统一；主体造型与配色保持一致，构图留白舒适，光线柔和，避免塑料质感和摄影写实，不添加未指定元素。'
+  },
+  {
+    id: 'storybook_illustration',
+    name: '绘本插画',
+    prompt:
+      '温暖的儿童绘本插画风格，形状简洁亲切，手绘线条与柔和块面结合，色彩明亮协调，细节适度；角色外观、服饰和色彩保持一致，背景清楚但不过度复杂，情绪友好，画面易读，不添加未指定元素。'
+  },
+  {
+    id: 'stop_motion',
+    name: '定格动画',
+    prompt:
+      '手工定格动画风格，角色与场景呈现可触摸的黏土、布料、纸艺或微缩模型质感，保留细微手作痕迹，柔和真实的布景光线；角色造型、材质和场景布局保持一致，动作呈现逐格动画的清晰姿势与轻微手作感，不添加未指定元素。'
+  },
+  {
+    id: 'pixel_art',
+    name: '像素动画',
+    prompt:
+      '精致像素动画风格，清晰的像素边缘与有限色板，明暗和轮廓简洁明确；角色比例、服饰、颜色及像素密度保持一致，构图易读，动作通过明确的逐帧姿势表达，不使用平滑抗锯齿或摄影纹理，不添加未指定元素。'
+  }
+]
+const projectStylePresetId = ref('cinematic_realism')
+const projectStyleNode = computed<Obj | null>(() => {
+  if (!project.value) return null
+  const saved = project.value.settings?.visualStyle
+  const text = typeof saved === 'string' ? saved : String(saved?.text || '')
+  const presetId =
+    typeof saved === 'string'
+      ? saved.trim()
+        ? 'custom'
+        : 'cinematic_realism'
+      : String(
+          saved?.presetId || (saved?.text ? 'custom' : 'cinematic_realism')
+        )
+  const preset = projectStylePresets.find((item) => item.id === presetId)
+  return {
+    id: `project-style:${projectId.value}`,
+    kind: 'project_style',
+    revision: project.value.revision,
+    name: '全局风格',
+    text: text || defaultProjectStyle,
+    presetId,
+    styleLabel: preset?.name || '自定义',
+    confirmed:
+      typeof saved === 'string'
+        ? Boolean(saved.trim())
+        : saved?.confirmed === true
+  }
+})
+const projectMenuOpen = ref(false)
 const definitions = ref<Obj[]>([]),
   canvasMode = ref<'story' | 'agents'>(
     localStorage.getItem('sean-studio-canvas-mode') === 'agents'
@@ -850,7 +1109,20 @@ const definitions = ref<Obj[]>([]),
   navigationPath = ref<string[]>([]),
   showAllResources = ref(false),
   showHistory = ref(false)
+const inspectorElement = ref<HTMLElement | null>(null)
+const inspectorWidth = ref(520)
 const mediaPreview = ref<Obj | null>(null)
+const settingsOpen = ref(false)
+const defaultCanvasSettings = {
+  nodePadding: 4,
+  showCapabilityBadges: true,
+  linkStyle: 'spline' as 'spline' | 'linear' | 'straight',
+  linkMarker: 'circle' as 'circle' | 'arrow' | 'none',
+  linkColor: '#9A9',
+  linkWidth: 3,
+  panelOpacity: 0.94
+}
+const canvasSettings = ref({ ...defaultCanvasSettings })
 const activeWorkflowId = ref(''),
   workflowTargets = ref<Record<string, string>>({}),
   workflowContexts = ref<Record<string, string>>({}),
@@ -859,14 +1131,16 @@ const activeWorkflowId = ref(''),
   trustEntryOpenedFor = ref('')
 const agentError = ref(''),
   syncMessage = ref(''),
+  piSyncMessage = ref(''),
   workspaceToTrust = ref(''),
-  error = ref('')
+  error = ref(''),
+  notice = ref('')
 const conceptGenerating = ref(false)
+const pendingAgentCanvasEntityId = ref('')
 const importing = ref(false),
   novelName = ref(''),
   novelText = ref(''),
-  entityName = ref(''),
-  entityDescription = ref(''),
+  projectStyleText = ref(''),
   resourceName = ref(''),
   resourceDescription = ref(''),
   resourceText = ref('')
@@ -885,7 +1159,6 @@ const hoverTooltip = ref<{
 const invalidGlowId = ref('')
 const confirmingAppearanceId = ref('')
 let referenceUploadEntityId = ''
-let referenceUploadDescription = ''
 const contextMenu = ref<{ x: number; y: number; nodeId: string } | null>(null)
 const focusId = computed(() => navigationPath.value.at(-1) || '')
 const currentObject = computed(() => objectById(focusId.value))
@@ -939,7 +1212,13 @@ const visibleObjects = computed(() =>
             (candidate.id === o.workflowRunId ||
               candidate.inputs?.some((input: Obj) => input.id === o.id))
         )
-        if (run && !runHasVisibleImages(run)) return false
+        const runHasFinishedOutputs =
+          run &&
+          ['waiting_confirmation', 'succeeded'].includes(
+            effectiveRunStatus(run)
+          ) &&
+          (run.outputs || []).length > 0
+        if (runHasFinishedOutputs && !runHasVisibleImages(run)) return false
       }
       return true
     }
@@ -1006,6 +1285,7 @@ const visibleWorkflowRuns = computed(() => {
   const ids = new Set(visibleObjects.value.map((o) => o.id))
   const scope = objects.value.find((o) => o.id === focusId.value)
   return runs.value.filter((run) => {
+    if (run.canvasHidden) return false
     const latestWithResults = !runs.value.some(
       (candidate) =>
         candidate.targetId === run.targetId &&
@@ -1048,9 +1328,11 @@ const visibleWorkflowRuns = computed(() => {
     )
   })
 })
-const visibleRunCount = computed(() => visibleWorkflowRuns.value.length)
 const canvasObjects = computed(() => [
   ...visibleObjects.value.filter((o) => o.kind !== 'proposal'),
+  ...(canvasMode.value === 'story' && !focusId.value && projectStyleNode.value
+    ? [projectStyleNode.value]
+    : []),
   ...pendingProposalItems.value,
   ...visibleWorkflowRuns.value.map((run) => {
     const outputTypes: Record<string, string> = {
@@ -1084,14 +1366,21 @@ function isImplicitThreeviewDetail(object: Obj) {
 const contextNode = computed(() =>
   contextMenu.value ? objectById(contextMenu.value.nodeId) : null
 )
-watch(selected, (object) => {
-  entityName.value = object?.kind === 'entity' ? object.name || '' : ''
-  entityDescription.value =
-    object?.kind === 'entity' ? object.description || '' : ''
+watch(selected, async (object) => {
+  if (object) loadInspectorWidth()
+  projectStyleText.value =
+    object?.kind === 'project_style'
+      ? String(object.text || defaultProjectStyle)
+      : ''
+  projectStylePresetId.value =
+    object?.kind === 'project_style'
+      ? String(object.presetId || 'custom')
+      : 'cinematic_realism'
   resourceName.value = object?.kind === 'resource' ? object.name || '' : ''
   resourceDescription.value =
     object?.kind === 'resource' ? object.description || '' : ''
   resourceText.value = object?.kind === 'resource' ? object.text || '' : ''
+  await nextTick()
 })
 const agentGraphNodes = computed<Obj[]>(() => {
   if (!project.value) return []
@@ -1301,6 +1590,7 @@ const activeRun = (run: Obj) =>
   !['succeeded', 'failed', 'cancelled'].includes(effectiveRunStatus(run))
 const objectById = (id: string) =>
   objects.value.find((o) => o.id === id && o.status !== 'removed') ||
+  (projectStyleNode.value?.id === id ? projectStyleNode.value : null) ||
   pendingProposalItems.value.find((o) => o.id === id) ||
   agentGraphNodes.value.find((o) => o.id === id) ||
   agentGraphNodes.value.find(
@@ -1310,6 +1600,7 @@ const objectById = (id: string) =>
   )
 const contentUrl = (id: string) => `/studio-api/v1/assets/${id}/content`
 const names: Record<string, string> = {
+  project_style: '全局风格',
   agent_project: 'Studio / Pi 项目',
   workflow_agent: 'Workflow Agent',
   workflow_conversation: 'Agent 对话',
@@ -1386,14 +1677,6 @@ const formatAgentTime = (value?: string | null) => {
         minute: '2-digit'
       }).format(date)
 }
-function agentWorkspaceLabel(workspaceId?: string) {
-  return (
-    agentGraphNodes.value
-      .find((node) => node.kind === 'agent_project')
-      ?.workspaces?.find((item: Obj) => item.workspaceId === workspaceId)
-      ?.workspaceLabel || '尚未关联工作区'
-  )
-}
 function hasAgentWorkspaceBinding(workspaceId?: string) {
   return objects.value.some(
     (item) => item.kind === 'pi_binding' && item.workspaceId === workspaceId
@@ -1428,6 +1711,8 @@ let nodeDrag:
     }
   | undefined
 function showError(e: unknown) {
+  notice.value = ''
+  pendingAgentCanvasEntityId.value = ''
   error.value = e instanceof Error ? e.message : String(e)
 }
 async function refresh() {
@@ -1473,6 +1758,7 @@ async function syncPiProject() {
   navigationBusy.value = true
   agentError.value = ''
   syncMessage.value = ''
+  piSyncMessage.value = '正在从 PiWeb 同步对话…'
   try {
     const result = await studioApi(`/projects/${projectId.value}/pi-sync`, {
       requestId: requestId()
@@ -1485,8 +1771,10 @@ async function syncPiProject() {
       `${result.uncertainCreation} 个创建状态待核对。`
     if (result.unboundWorkspaceSessions)
       syncMessage.value += `另有 ${result.unboundWorkspaceSessions} 个 PiWeb 会话未绑定到 Studio Workflow。`
+    piSyncMessage.value = `PiWeb 对话已刷新：${result.foundBindings} 个绑定有效，${result.missingWithHistory} 个有历史的会话缺失。`
   } catch (e) {
     syncMessage.value = `PiWeb 同步失败：${e instanceof Error ? e.message : String(e)}`
+    piSyncMessage.value = syncMessage.value
   } finally {
     navigationBusy.value = false
   }
@@ -1502,7 +1790,30 @@ function handleProjectEvent(event: MessageEvent<string>) {
   projectEventSeq = Math.max(projectEventSeq, Number(update.seq) || 0)
   // Turn lifecycle events do not affect conversation count or navigation.
   if (update.type?.startsWith('pi_turn.')) return
+  const changed = update.data
+  if (
+    update.actor?.startsWith('agent:') &&
+    changed?.kind === 'resource' &&
+    ['concept_brief', 'concept_prompt'].includes(changed.role) &&
+    changed.entityId
+  ) {
+    pendingAgentCanvasEntityId.value = changed.entityId
+    notice.value = 'Pi 已更新概念图设计。'
+  }
   void refresh()
+}
+function dismissCanvasNotice() {
+  notice.value = ''
+  pendingAgentCanvasEntityId.value = ''
+}
+function openAgentConceptInCanvas() {
+  const entityId = pendingAgentCanvasEntityId.value
+  if (!entityId || !objectById(entityId)) return
+  canvasMode.value = 'story'
+  localStorage.setItem('sean-studio-canvas-mode', 'story')
+  const path = objectPath(entityId, objectHierarchy(objects.value))
+  navigatePath(path)
+  dismissCanvasNotice()
 }
 async function openProject() {
   mediaPreview.value = null
@@ -1512,12 +1823,15 @@ async function openProject() {
   objects.value = []
   selected.value = null
   syncMessage.value = ''
+  piSyncMessage.value = ''
   navigationPath.value = []
   sessionId.value = ''
   if (!projectId.value) return
   localStorage.setItem('sean-studio-project', projectId.value)
   try {
     await refresh()
+    loadCanvasSettings()
+    loadInspectorWidth()
     activeWorkflowId.value = ''
     workflowTargets.value = {}
     workflowContexts.value = {}
@@ -1531,7 +1845,9 @@ async function openProject() {
       current &&
       !['source', 'chapter', 'scene', 'entity'].includes(current.kind)
         ? current
-        : null
+        : !navigationPath.value.length && !projectStyleNode.value?.confirmed
+          ? projectStyleNode.value
+          : null
     if (route?.projectId !== projectId.value) writeRoute()
     await nextTick()
     projectGraph()
@@ -1551,6 +1867,7 @@ async function newProject() {
     const p = await studioApi('/projects', { name, requestId: requestId() })
     projects.value.push(p)
     projectId.value = p.id
+    projectMenuOpen.value = false
     await openProject()
   } catch (e) {
     showError(e)
@@ -1563,6 +1880,162 @@ function viewKey() {
     'sean-canvas-view:' +
     routeHash({ projectId: projectId.value, path: navigationPath.value })
   )
+}
+function inspectorWidthKey() {
+  return `sean-studio-inspector-width:${projectId.value}`
+}
+function canvasSettingsKey() {
+  return `sean-studio-canvas-settings:${projectId.value}`
+}
+function nodePadding() {
+  return canvasSettings.value.nodePadding
+}
+function canStartResourceAgentConversation(resource: Obj) {
+  return (
+    resource.role === 'reference' ||
+    resource.role === 'concept_brief' ||
+    (resource.type === 'image' &&
+      ['concept', 'appearance_candidate'].includes(resource.role || ''))
+  )
+}
+function capabilityBadges(node: Obj, agentGraph = false) {
+  if (!canvasSettings.value.showCapabilityBadges) return []
+  if (agentGraph) {
+    if (node.kind === 'workflow_agent') return ['A', 'W']
+    if (node.kind === 'workflow_conversation') return ['A']
+    return []
+  }
+  const badges: string[] = []
+  if (
+    node.kind === 'entity' ||
+    node.kind === 'workflow_agent' ||
+    node.kind === 'workflow_conversation' ||
+    (node.kind === 'proposal_item' && Boolean(node.discussionId)) ||
+    (node.kind === 'resource' &&
+      (Boolean(resourceAgentSession(node)) ||
+        canStartResourceAgentConversation(node))) ||
+    (node.kind === 'workflow_run' && node.sessionId)
+  )
+    badges.push('A')
+  if (
+    ['source', 'chapter', 'entity', 'workflow_run'].includes(node.kind) ||
+    (node.kind === 'resource' && node.role === 'concept_brief')
+  )
+    badges.push('W')
+  return badges
+}
+function drawCapabilityBadges(
+  ctx: CanvasRenderingContext2D,
+  node: Obj,
+  width: number,
+  agentGraph = false
+) {
+  const badges = capabilityBadges(node, agentGraph)
+  if (!badges.length) return
+  const scale = 1 / (canvas.ds.scale || 1)
+  const height = 20 * scale
+  const gap = 4 * scale
+  const badgeWidth = 20 * scale
+  const totalWidth = badges.length * badgeWidth + (badges.length - 1) * gap
+  let x = width - nodePadding() - totalWidth
+  const y = nodePadding() + (agentGraph ? 24 * scale : 0)
+  ctx.save()
+  ctx.font = `700 ${10 * scale}px system-ui`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (const badge of badges) {
+    ctx.fillStyle = badge === 'A' ? '#386b79' : '#65713f'
+    ctx.beginPath()
+    ctx.roundRect(x, y, badgeWidth, height, 4 * scale)
+    ctx.fill()
+    ctx.fillStyle = '#f4f7f8'
+    ctx.fillText(badge, x + badgeWidth / 2, y + height / 2)
+    x += badgeWidth + gap
+  }
+  ctx.restore()
+}
+function loadCanvasSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(canvasSettingsKey()) || '{}')
+    canvasSettings.value = {
+      ...defaultCanvasSettings,
+      ...saved,
+      nodePadding: Number.isFinite(saved.nodePadding)
+        ? Math.min(20, Math.max(4, saved.nodePadding))
+        : 4,
+      showCapabilityBadges: saved.showCapabilityBadges !== false,
+      linkStyle: ['spline', 'linear', 'straight'].includes(saved.linkStyle)
+        ? saved.linkStyle
+        : 'spline',
+      linkColor: /^#[0-9a-f]{6}$/i.test(saved.linkColor || '')
+        ? saved.linkColor
+        : '#9A9',
+      linkWidth: Number.isFinite(saved.linkWidth)
+        ? Math.min(12, Math.max(1, saved.linkWidth))
+        : 3,
+      linkMarker: ['circle', 'arrow', 'none'].includes(saved.linkMarker)
+        ? saved.linkMarker
+        : 'circle',
+      panelOpacity: Number.isFinite(saved.panelOpacity)
+        ? Math.min(1, Math.max(0.35, saved.panelOpacity))
+        : 0.94
+    }
+  } catch {
+    canvasSettings.value = { ...defaultCanvasSettings }
+  }
+  applyCanvasSettings()
+}
+function applyCanvasSettings() {
+  if (projectId.value) {
+    localStorage.setItem(
+      canvasSettingsKey(),
+      JSON.stringify(canvasSettings.value)
+    )
+  }
+  if (!canvas) return
+  canvas.links_render_mode =
+    canvasSettings.value.linkStyle === 'linear'
+      ? LinkRenderType.LINEAR_LINK
+      : canvasSettings.value.linkStyle === 'straight'
+        ? LinkRenderType.STRAIGHT_LINK
+        : LinkRenderType.SPLINE_LINK
+  canvas.default_link_color = canvasSettings.value.linkColor
+  canvas.connections_width = canvasSettings.value.linkWidth
+  canvas.linkMarkerShape =
+    canvasSettings.value.linkMarker === 'none'
+      ? LinkMarkerShape.None
+      : canvasSettings.value.linkMarker === 'arrow'
+        ? LinkMarkerShape.Arrow
+        : LinkMarkerShape.Circle
+  for (const node of graph.nodes)
+    Object.assign(node, { padding: canvasSettings.value.nodePadding })
+  canvas.setDirty(true, true)
+}
+function savedInspectorWidth() {
+  const current = localStorage.getItem(inspectorWidthKey())
+  const legacy = localStorage.getItem(
+    `sean-studio-inspector-width:${projectId.value}:${canvasMode.value}`
+  )
+  const width = Number(current ?? (legacy ? Number(legacy) + 42 : NaN))
+  const maxWidth = Math.max(360, Math.min(1200, window.innerWidth * 0.96))
+  return Number.isFinite(width) ? Math.min(maxWidth, Math.max(360, width)) : 520
+}
+function loadInspectorWidth() {
+  inspectorWidth.value = savedInspectorWidth()
+}
+function saveInspectorWidth() {
+  const maxWidth = Math.max(360, Math.min(1200, window.innerWidth * 0.96))
+  inspectorWidth.value = Math.min(maxWidth, Math.max(360, inspectorWidth.value))
+  if (projectId.value)
+    localStorage.setItem(inspectorWidthKey(), String(inspectorWidth.value))
+}
+function persistInspectorWidth() {
+  const element = inspectorElement.value
+  if (!element || !projectId.value) return
+  const width = Math.round(element.getBoundingClientRect().width)
+  if (width < 360) return
+  inspectorWidth.value = width
+  localStorage.setItem(inspectorWidthKey(), String(width))
 }
 function rememberView() {
   clearTimeout(viewTimer)
@@ -1662,22 +2135,25 @@ function flashInvalidAction(id: string) {
   }, 700)
 }
 function nodePreview(o: Obj) {
-  if (o.kind === 'entity') return ''
+  if (o.kind === 'entity' || o.kind === 'chapter') return ''
+  if (o.kind === 'project_style')
+    return o.confirmed
+      ? String(o.styleLabel || '自定义')
+      : `待确认 · ${o.styleLabel || '电影写实'}`
+  if (o.kind === 'source') {
+    const paragraphs = o.anchors?.length || 0
+    const characters = String(o.text || '').length
+    return `${paragraphs} 段原文 · ${characters} 字`
+  }
   const source = o.sourceId && objectById(o.sourceId)
   const chapterText =
     o.kind === 'chapter' && source?.text
       ? source.text.slice(o.start || 0, o.end || undefined)
       : ''
   const raw =
-    o.preview ||
-    o.description ||
-    o.brief ||
-    chapterText ||
-    o.text ||
-    o.status ||
-    ''
+    o.preview || o.description || o.brief || chapterText || o.text || ''
   const text = String(raw).replace(/\s+/g, ' ').trim()
-  return text.length > 170 ? `${text.slice(0, 169).trimEnd()}…` : text
+  return text.length > 76 ? `${text.slice(0, 75).trimEnd()}…` : text
 }
 function toggleCanvasMode() {
   switchCanvasMode(canvasMode.value === 'story' ? 'agents' : 'story')
@@ -1693,6 +2169,7 @@ function openNovelImport() {
 }
 function switchCanvasMode(mode: 'story' | 'agents') {
   canvasMode.value = mode
+  loadInspectorWidth()
   localStorage.setItem('sean-studio-canvas-mode', mode)
   selected.value = null
   void nextTick(() => {
@@ -1736,27 +2213,14 @@ function deleteNodeLabel(node: Obj) {
   }
   return `删除「${node.name || kindName(node.kind)}」`
 }
-function latestConceptPlan(entityId: string) {
-  const briefs = resources.value
-    .filter(
-      (resource) =>
-        resource.entityId === entityId &&
-        resource.role === 'concept_brief' &&
-        resource.status !== 'removed'
-    )
-    .sort((a, b) => Number(b.revision || 0) - Number(a.revision || 0))
-  for (const brief of briefs) {
-    const prompt = resources.value.find(
-      (resource) =>
-        resource.entityId === entityId &&
-        resource.role === 'concept_prompt' &&
-        (resource.conceptPlanId === brief.conceptPlanId ||
-          resource.sourceResourceIds?.includes(brief.id)) &&
-        resource.status !== 'removed'
-    )
-    if (prompt) return { brief, prompt }
-  }
-  return null
+function conceptBranchId(brief: Obj) {
+  if (Number.isInteger(brief.conceptId) && brief.conceptId > 0)
+    return brief.conceptId
+  const branches = resources.value.filter(
+    (resource) =>
+      resource.entityId === brief.entityId && resource.role === 'concept_brief'
+  )
+  return branches.findIndex((resource) => resource.id === brief.id) + 1
 }
 function conceptPlanForBrief(brief: Obj) {
   const prompt = resources.value.find(
@@ -1770,6 +2234,7 @@ function conceptPlanForBrief(brief: Obj) {
   return {
     brief,
     prompt,
+    conceptId: conceptBranchId(brief),
     ready: Boolean(
       prompt &&
       brief.status !== 'needs_refresh' &&
@@ -1804,6 +2269,7 @@ async function generateConceptFromBrief(brief: Obj) {
     await studioApi(`/workflow-sessions/${session.id}/generate-concept`, {
       briefResourceId: plan.brief.id,
       promptResourceId: prompt.id,
+      conceptId: plan.conceptId,
       expectedBriefRevision: plan.brief.revision,
       expectedPromptRevision: prompt.revision,
       confirmedPlan: true,
@@ -1817,8 +2283,8 @@ async function generateConceptFromBrief(brief: Obj) {
   }
 }
 async function askAgentToRefreshConceptPrompt(brief: Obj) {
-  const plan = latestConceptPlan(brief.entityId)
-  if (!plan) return
+  const plan = conceptPlanForBrief(brief)
+  if (!plan.prompt) return
   const sessionId =
     brief.workflowSessionId ||
     plan.prompt.workflowSessionId ||
@@ -1832,7 +2298,7 @@ async function askAgentToRefreshConceptPrompt(brief: Obj) {
     await startEntityWorkflowConversation(brief.entityId)
     return
   }
-  const instruction = `请根据我刚保存的概念图设计说明，更新同一设计分支的 Qwen Image 2.1 提示词。保留已确认的引用图及其顺序和用途，不生成图片。设计说明资源：${brief.id}；提示词资源：${plan.prompt.id}。更新提示词资源后，确认其状态恢复为可生成。`
+  const instruction = `请根据我刚保存的概念图 ${plan.conceptId} 设计说明，只更新这个编号分支的 Qwen Image 2.1 提示词。保留该分支已确认的引用图及其顺序和用途，不生成图片。设计说明资源：${brief.id}；提示词资源：${plan.prompt.id}。更新提示词资源后，确认其状态恢复为可生成。`
   try {
     await navigator.clipboard.writeText(instruction)
   } catch {
@@ -1970,13 +2436,6 @@ async function restoreRoute() {
       route.path.filter((id) => objectById(id)),
       false
     )
-}
-function chapterText(c: Obj) {
-  return (
-    objectById(c.sourceId)?.text?.slice(c.start, c.end) ||
-    c.brief ||
-    '此历史章节尚未绑定原文；请先结构化小说。'
-  )
 }
 function sourceChapterCount(sourceId: string) {
   return objects.value.filter(
@@ -2455,32 +2914,6 @@ async function rejectCandidate(candidate: Obj) {
     showError(e)
   }
 }
-async function saveEntityDetails() {
-  const entity = selected.value
-  if (entity?.kind !== 'entity') return
-  if (!entityName.value.trim()) {
-    showError(new Error('实体名称不能为空。'))
-    return
-  }
-  try {
-    await studioApi(
-      `/objects/${entity.id}`,
-      {
-        expectedRevision: entity.revision,
-        fields: {
-          name: entityName.value.trim(),
-          description: entityDescription.value.trim()
-        },
-        requestId: requestId()
-      },
-      'PATCH'
-    )
-    await refresh()
-    syncMessage.value = '实体信息已更新。'
-  } catch (e) {
-    showError(e)
-  }
-}
 async function saveResourceDetails(resource: Obj) {
   const fields: Record<string, string> = { name: resourceName.value.trim() }
   if (resource.role === 'reference') {
@@ -2503,12 +2936,47 @@ async function saveResourceDetails(resource: Obj) {
     showError(e)
   }
 }
-function selectEntityIntroduction(entity: Obj) {
-  const introduction = resources.value.find(
-    (resource) =>
-      resource.entityId === entity.id && resource.role === 'entity_introduction'
+async function saveProjectStyle() {
+  if (!project.value || !projectId.value) return
+  const style = projectStyleText.value.trim()
+  if (!style) {
+    showError(new Error('项目统一风格不能为空。'))
+    return
+  }
+  try {
+    await studioApi(
+      `/projects/${projectId.value}/visual-style`,
+      {
+        expectedProjectRevision: project.value.revision,
+        style,
+        presetId: projectStylePresetId.value,
+        requestId: requestId()
+      },
+      'PATCH'
+    )
+    await refresh()
+    pendingAgentCanvasEntityId.value = ''
+    notice.value = '全局风格已更新，后续生成将使用此风格。'
+  } catch (e) {
+    showError(e)
+  }
+}
+async function saveCustomProjectStyle() {
+  projectStylePresetId.value = 'custom'
+  await saveProjectStyle()
+}
+async function selectProjectStylePreset() {
+  const preset = projectStylePresets.find(
+    (item) => item.id === projectStylePresetId.value
   )
-  if (introduction) select(introduction)
+  if (!preset) return
+  projectStyleText.value = preset.prompt
+  await saveProjectStyle()
+}
+async function adoptDefaultProjectStyle() {
+  projectStyleText.value = defaultProjectStyle
+  projectStylePresetId.value = 'cinematic_realism'
+  await saveProjectStyle()
 }
 function isEntityImage(resource: Obj) {
   return (
@@ -2529,6 +2997,8 @@ async function removeCanvasNode(node: Obj) {
   const label = node.name || kindName(node.kind)
   contextMenu.value = null
   error.value = ''
+  notice.value = ''
+  pendingAgentCanvasEntityId.value = ''
   try {
     await studioApi(`/objects/${node.id}/remove`, {
       expectedRevision: node.revision,
@@ -2536,19 +3006,17 @@ async function removeCanvasNode(node: Obj) {
     })
     if (selected.value?.id === node.id) selected.value = null
     await refresh()
-    error.value =
+    notice.value =
       node.kind === 'workflow_run' && activeRun(node)
-        ? `已从画布隐藏运行节点「${label}」；后台运行会继续。`
+        ? `已从画布隐藏运行节点「${label}」。已提交的生成不会因此停止。`
         : `已删除「${label}」节点。`
   } catch (e) {
     showError(e)
   }
 }
 function beginReferenceImageUpload(entityId: string) {
-  const description = window.prompt('这张参考图片用于参考什么？', '')
-  if (description === null || !referenceFileInput.value) return
+  if (!referenceFileInput.value) return
   referenceUploadEntityId = entityId
-  referenceUploadDescription = description.trim()
   referenceFileInput.value.value = ''
   referenceFileInput.value.click()
 }
@@ -2563,12 +3031,11 @@ async function uploadReference(event: Event) {
     for (const byte of bytes) binary += String.fromCharCode(byte)
     await studioApi(`/entities/${entityId}/reference-image`, {
       name: file.name,
-      description: referenceUploadDescription,
+      description: '',
       data: btoa(binary),
       requestId: requestId()
     })
     referenceUploadEntityId = ''
-    referenceUploadDescription = ''
     await refresh()
   } catch (e) {
     showError(e)
@@ -2789,7 +3256,8 @@ function fit() {
   const bottom = Math.max(...nodes.map((n) => n.pos[1] + n.size[1]))
   const width = Math.max(
     200,
-    canvasHost.value.clientWidth - (selected.value ? 390 : 0)
+    canvasHost.value.clientWidth -
+      (selected.value ? savedInspectorWidth() + 32 : 0)
   )
   const height = canvasHost.value.clientHeight
   canvas.ds.scale = Math.min(
@@ -2858,13 +3326,46 @@ function projectGraph() {
       previewHeight: number
       imageOnly: boolean
       entityTile: boolean
+      square: boolean
       assetId: string
       titleLines: string[]
       bodyLines: string[]
     }
   >(
     visible.map((object) => {
-      const title = object.name || kindName(object.kind)
+      const conceptBrief =
+        object.role === 'concept_prompt'
+          ? resources.value.find(
+              (resource) =>
+                resource.role === 'concept_brief' &&
+                (resource.conceptPlanId === object.conceptPlanId ||
+                  object.sourceResourceIds?.includes(resource.id))
+            )
+          : object.role === 'concept' ||
+              (object.kind === 'workflow_run' && object.stage === 'concept')
+            ? resources.value.find(
+                (resource) =>
+                  resource.role === 'concept_brief' &&
+                  (object.inputs?.some(
+                    (input: Obj) => input.id === resource.id
+                  ) ||
+                    object.sourceResourceIds?.includes(resource.id))
+              )
+            : object.role === 'concept_brief'
+              ? object
+              : null
+      const branchId = conceptBrief
+        ? conceptBranchId(conceptBrief)
+        : object.conceptId
+      const title =
+        branchId && object.role === 'concept_brief'
+          ? `概念图 ${branchId} · 设计说明`
+          : branchId && object.role === 'concept_prompt'
+            ? `概念图 ${branchId} · 提示词`
+            : branchId &&
+                (object.role === 'concept' || object.stage === 'concept')
+              ? `概念图 ${branchId} · ${object.kind === 'workflow_run' ? '生成' : '候选图'}`
+              : object.name || kindName(object.kind)
       const entityResource = entityPreviewAssets.get(object.id)
       const assetId =
         entityResource?.assetId ||
@@ -2889,13 +3390,7 @@ function projectGraph() {
       const previewHeight = Math.round(sourceHeight * previewScale)
       const entityTile = object.kind === 'entity' && !assetId
       const imageOnly = Boolean(isImage)
-      const bodyText = entityTile
-        ? ''
-        : object.type === 'audio'
-          ? `♫ 双击试听 · ${statusName(object.status)}${nodePreview(object) ? ` · ${nodePreview(object)}` : ''}`
-          : object.type === 'video'
-            ? `▶ 双击播放 · ${statusName(object.status)}${nodePreview(object) ? ` · ${nodePreview(object)}` : ''}`
-            : nodePreview(object)
+      const bodyText = entityTile ? '' : nodePreview(object)
       const preferredWidth = Math.max(
         190,
         Math.min(
@@ -2922,28 +3417,49 @@ function projectGraph() {
         entityTile ? 180 : textWidth,
         '600 13px system-ui'
       )
-      const bodyLines = wrapText(bodyText, textWidth, '12px system-ui')
+      const wrappedBodyLines = wrapText(bodyText, textWidth, '12px system-ui')
+      const bodyLineLimit = 2
+      const bodyLines =
+        wrappedBodyLines.length > bodyLineLimit
+          ? [
+              ...wrappedBodyLines.slice(0, bodyLineLimit - 1),
+              `${wrappedBodyLines[bodyLineLimit - 1].trimEnd()}…`
+            ]
+          : wrappedBodyLines
       const activityLines = object.agentActivity
         ? wrapText(object.agentActivity, textWidth, '12px system-ui')
         : []
+      const square =
+        entityTile ||
+        (!imageOnly &&
+          !bodyLines.length &&
+          !activityLines.length &&
+          object.type !== 'video')
+      const squareSize = Math.max(
+        160,
+        Math.min(
+          260,
+          Math.max(textWidth, titleLines.length * 17 + nodePadding() * 2)
+        )
+      )
       const textHeight =
-        20 +
-        titleLines.length * 17 +
-        (activityLines.length ? 5 + activityLines.length * 16 : 0) +
-        (bodyLines.length ? 5 + bodyLines.length * 16 : 0) +
-        8
+        16 +
+        titleLines.length * 16 +
+        (activityLines.length ? 3 + activityLines.length * 15 : 0) +
+        (bodyLines.length ? 3 + bodyLines.length * 15 : 0) +
+        10
       return [
         object.id,
         {
           width: imageOnly
             ? previewWidth
-            : entityTile
-              ? 200
+            : square
+              ? squareSize
               : Math.max(textWidth, previewWidth),
           height: imageOnly
             ? previewHeight
-            : entityTile
-              ? 108
+            : square
+              ? squareSize
               : Math.max(
                   textHeight +
                     (object.type === 'video' ? previewHeight + 8 : 0),
@@ -2953,6 +3469,7 @@ function projectGraph() {
           previewHeight,
           imageOnly,
           entityTile,
+          square,
           assetId,
           titleLines,
           bodyLines
@@ -3114,6 +3631,7 @@ function projectGraph() {
   for (const o of visible) {
     const title = o.name || kindName(o.kind)
     const n = new LGraphNode(title)
+    Object.assign(n, { padding: canvasSettings.value.nodePadding })
     n.id = toNodeId(o.id)
     n.pos = positions.get(o.id)!
     n.size = [
@@ -3141,9 +3659,7 @@ function projectGraph() {
             : '#2a3e52'
     n.bgcolor = dimensions.imageOnly ? 'transparent' : '#152431'
     Object.defineProperty(n, 'title_mode', { value: LiteGraph.NO_TITLE })
-    if (dimensions.imageOnly || dimensions.entityTile) {
-      n.shape = LiteGraph.BOX_SHAPE
-    }
+    n.shape = LiteGraph.BOX_SHAPE
     n.addInput('', '*')
     n.addOutput('', '*')
     // LiteGraph expands nodes to fit their native title when slots are added.
@@ -3168,7 +3684,9 @@ function projectGraph() {
               : (n.size[0] - dimensions.previewWidth) / 2,
             dimensions.imageOnly
               ? 0
-              : 8 + dimensions.titleLines.length * 17 + 5,
+              : nodePadding() +
+                  dimensions.titleLines.length * 17 +
+                  nodePadding(),
             dimensions.previewWidth,
             dimensions.previewHeight
           )
@@ -3192,14 +3710,10 @@ function projectGraph() {
             ? '参考图'
             : ['threeview', 'threeview_current'].includes(o.role || '')
               ? '三视图'
-              : [
-                    'concept',
-                    'appearance_candidate',
-                    'appearance_current'
-                  ].includes(o.role || '')
+              : ['concept', 'appearance_candidate'].includes(o.role || '')
                 ? '概念图'
                 : ''
-        if (imageTypeLabel) {
+        if (imageTypeLabel && !String(o.name || '').includes(imageTypeLabel)) {
           const badgeScale = 1 / canvas.ds.scale
           ctx.font = `600 ${13 * badgeScale}px system-ui`
           const badgeWidth =
@@ -3215,6 +3729,13 @@ function projectGraph() {
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
           ctx.fillText(imageTypeLabel, n.size[0] / 2, n.size[1] / 2)
+        }
+        if (o.kind === 'entity' && o.flags?.includes('ai-created')) {
+          ctx.font = `600 ${11 / canvas.ds.scale}px system-ui`
+          ctx.fillStyle = '#f0bd4d'
+          ctx.textAlign = 'left'
+          ctx.textBaseline = 'top'
+          ctx.fillText('AI 创建', nodePadding(), nodePadding())
         }
         if (o.role === 'appearance_current') {
           ctx.strokeStyle = '#f0bd4d'
@@ -3239,9 +3760,10 @@ function projectGraph() {
             badgeY + badgeHeight / 2
           )
         }
+        drawCapabilityBadges(ctx, o, n.size[0])
         const labelLines = wrapText(
           o.name || '图片',
-          n.size[0] - 16,
+          n.size[0] - nodePadding() * 2,
           '12px system-ui'
         )
         const labelHeight = Math.max(24, labelLines.length * 15 + 8)
@@ -3251,7 +3773,8 @@ function projectGraph() {
           Math.max(
             ...labelLines.map((line) => ctx.measureText(line).width),
             0
-          ) + 16
+          ) +
+            nodePadding() * 2
         )
         const labelX = (n.size[0] - labelWidth) / 2
         const labelY = n.size[1] - labelHeight
@@ -3261,7 +3784,7 @@ function projectGraph() {
         ctx.textBaseline = 'top'
         ctx.textAlign = 'center'
         labelLines.forEach((line, index) =>
-          ctx.fillText(line, n.size[0] / 2, labelY + 4 + index * 15)
+          ctx.fillText(line, n.size[0] / 2, labelY + nodePadding() + index * 15)
         )
         ctx.restore()
         return
@@ -3283,26 +3806,14 @@ function projectGraph() {
             (n.size[1] - titleHeight) / 2 + index * 17
           )
         })
+        if (o.flags?.includes('ai-created')) {
+          ctx.font = '600 11px system-ui'
+          ctx.fillStyle = '#f0bd4d'
+          ctx.textAlign = 'left'
+          ctx.fillText('AI 创建', nodePadding(), nodePadding())
+        }
+        drawCapabilityBadges(ctx, o, n.size[0])
         return
-      }
-      const drillStatus =
-        focusId.value === o.id
-          ? '当前层'
-          : canDrill(objects.value, o.id, showAllResources.value)
-            ? ''
-            : '末级'
-      if (drillStatus) {
-        ctx.save()
-        ctx.font = '11px system-ui'
-        const badgeWidth = ctx.measureText(drillStatus).width + 14
-        const badgeX = n.size[0] - badgeWidth - 8
-        ctx.fillStyle = drillStatus === '当前层' ? '#43535e' : '#364752'
-        ctx.beginPath()
-        ctx.roundRect(badgeX, 5, badgeWidth, 20, 5)
-        ctx.fill()
-        ctx.fillStyle = '#e0e7eb'
-        ctx.fillText(drillStatus, badgeX + 7, 19)
-        ctx.restore()
       }
       ctx.save()
       ctx.fillStyle = '#203342'
@@ -3313,21 +3824,35 @@ function projectGraph() {
       ctx.font = '600 13px system-ui'
       ctx.fillStyle = '#f1f5f7'
       ctx.textAlign = 'center'
+      const titleY = dimensions.square
+        ? (n.size[1] - dimensions.titleLines.length * 17) / 2
+        : nodePadding()
       dimensions.titleLines.forEach((line, index) =>
-        ctx.fillText(line, n.size[0] / 2, 8 + index * 17, n.size[0])
+        ctx.fillText(
+          line,
+          n.size[0] / 2,
+          titleY + index * 17,
+          n.size[0] - nodePadding() * 2
+        )
       )
-      let textY = 8 + dimensions.titleLines.length * 17 + 17
+      let textY =
+        nodePadding() + dimensions.titleLines.length * 17 + nodePadding()
       if (o.agentActivity) {
         ctx.font = '12px system-ui'
         ctx.fillStyle = '#8fd1ae'
         ctx.textAlign = 'left'
         const activityLines = wrapText(
           `◉ ${o.agentActivity}`,
-          n.size[0],
+          n.size[0] - nodePadding() * 2,
           '12px system-ui'
         )
         activityLines.forEach((line, index) =>
-          ctx.fillText(line, 0, textY + index * 16, n.size[0])
+          ctx.fillText(
+            line,
+            nodePadding(),
+            textY + index * 16,
+            n.size[0] - nodePadding() * 2
+          )
         )
         textY += activityLines.length * 16 + 5
       }
@@ -3339,6 +3864,7 @@ function projectGraph() {
         ctx.fillText(line, 0, textY + index * 16, n.size[0])
       )
       ctx.restore()
+      drawCapabilityBadges(ctx, o, n.size[0])
     }
     graph.add(n)
   }
@@ -3574,6 +4100,8 @@ function projectAgentGraph() {
         ? `${title.slice(0, 23)}…`
         : title || kindName(node.kind)
     )
+    Object.assign(n, { padding: canvasSettings.value.nodePadding })
+    n.shape = LiteGraph.BOX_SHAPE
     n.id = toNodeId(node.id)
     n.pos = positions.get(node.id) || [0, 0]
     n.size = [350, node.kind === 'agent_project' ? 180 : 160]
@@ -3589,11 +4117,12 @@ function projectAgentGraph() {
     n.onDrawForeground = (ctx) => {
       ctx.save()
       ctx.beginPath()
-      ctx.rect(10, 24, n.size[0] - 20, n.size[1] - 30)
+      const padding = nodePadding()
+      ctx.rect(padding, 24, n.size[0] - padding * 2, n.size[1] - 30)
       ctx.clip()
       ctx.fillStyle = '#9eb4c4'
       ctx.font = '12px system-ui'
-      ctx.fillText(kindName(node.kind), 18, 42)
+      ctx.fillText(kindName(node.kind), padding, 42)
       ctx.fillStyle = '#d4e0e6'
       ctx.font = '12px system-ui'
       const preview = nodePreview(node)
@@ -3601,7 +4130,7 @@ function projectAgentGraph() {
       let line = ''
       for (const character of preview) {
         const next = line + character
-        if (line && ctx.measureText(next).width > n.size[0] - 28) {
+        if (line && ctx.measureText(next).width > n.size[0] - padding * 2) {
           lines.push(line)
           line = character.trimStart()
         } else line = next
@@ -3610,9 +4139,10 @@ function projectAgentGraph() {
       lines
         .slice(0, 4)
         .forEach((text, index) =>
-          ctx.fillText(text, 18, 72 + index * 17, n.size[0] - 32)
+          ctx.fillText(text, padding, 72 + index * 17, n.size[0] - padding * 2)
         )
       ctx.restore()
+      drawCapabilityBadges(ctx, node, n.size[0], true)
     }
     graph.add(n)
   }
@@ -3660,6 +4190,8 @@ watch(
 )
 onMounted(async () => {
   document.title = 'Story Studio · Sean'
+  window.addEventListener('pointerup', persistInspectorWidth, true)
+  window.addEventListener('pointercancel', persistInspectorWidth, true)
   graph = new LGraph()
   canvas = new LGraphCanvas(canvasElement.value!, graph)
   const computeVisibleArea = canvas.ds.computeVisibleArea.bind(canvas.ds)
@@ -3894,6 +4426,8 @@ onBeforeUnmount(() => {
   clearTimeout(invalidGlowTimer)
   clearTimeout(viewTimer)
   resizeObserver?.disconnect()
+  window.removeEventListener('pointerup', persistInspectorWidth, true)
+  window.removeEventListener('pointercancel', persistInspectorWidth, true)
   window.removeEventListener('resize', resize)
   canvas?.stopRendering()
 })
@@ -3915,38 +4449,42 @@ onBeforeUnmount(() => {
 .floating-brand {
   position: absolute;
   z-index: 20;
-  top: 12px;
-  left: 12px;
+  top: 10px;
+  left: 10px;
   display: flex;
   align-items: center;
   gap: 9px;
-  max-width: min(520px, calc(100vw - 24px));
-  padding: 6px 8px 6px 11px;
+  max-width: calc(100vw - 20px);
+}
+.floating-brand > .project-menu-trigger {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 22px;
+  box-shadow: 0 5px 18px rgb(0 0 0 / 28%);
+}
+.project-menu {
+  position: absolute;
+  top: 46px;
+  left: 0;
+  display: grid;
+  gap: 8px;
+  width: min(280px, calc(100vw - 24px));
+  padding: 10px;
   border: 1px solid #344b5b;
   border-radius: 10px;
-  background: rgb(20 34 46 / 92%);
-  box-shadow: 0 5px 18px rgb(0 0 0 / 24%);
-  backdrop-filter: blur(10px);
+  background: #14222ef5;
+  box-shadow: 0 8px 24px #0008;
 }
-.brand-mark {
-  color: #94c8b1;
-  font-size: 16px;
-}
-.brand-project {
-  color: #e2eaf0;
+.project-menu select,
+.project-menu button {
+  width: 100%;
+  height: auto;
+  padding: 8px 10px;
+  border-radius: 7px;
+  box-shadow: none;
   font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.floating-brand select {
-  width: min(300px, 55vw);
-  padding: 5px 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.floating-brand button {
-  padding: 4px 9px;
 }
 .version {
   color: var(--muted);
@@ -4036,38 +4574,39 @@ pre {
 }
 main {
   position: relative;
-  display: flex;
-  flex-direction: column;
   min-width: 0;
   min-height: 0;
 }
 nav {
-  height: 70px;
-  flex-shrink: 0;
+  position: absolute;
+  z-index: 12;
+  top: 10px;
+  right: 10px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--line);
+  gap: 6px;
+  max-width: calc(100vw - 70px);
+  padding: 4px;
+  border: 1px solid #344b5bcc;
+  border-radius: 10px;
+  background: rgb(20 34 46 / 90%);
+  box-shadow: 0 5px 18px rgb(0 0 0 / 24%);
+  backdrop-filter: blur(10px);
 }
-nav > div {
-  margin-right: auto;
-}
-nav small {
-  display: block;
-  font-size: 10px;
+nav.canvas-navigation {
+  height: auto;
+  min-height: 0;
+  flex-wrap: nowrap;
+  padding-left: 4px;
+  padding-right: 4px;
 }
 .canvas-navigation {
-  height: auto;
-  min-height: 70px;
-  flex-wrap: wrap;
-  /* Keep the project breadcrumb clear of the floating project picker above it. */
-  padding-left: 560px;
-  padding-right: 12px;
+  width: fit-content;
 }
 .navigation-location {
-  flex: 1;
-  min-width: 160px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(42vw, 520px);
   margin-right: 0;
 }
 .agent-view-heading {
@@ -4077,9 +4616,60 @@ nav small {
 .canvas-actions {
   display: flex;
   flex: 0 0 auto;
-  gap: 8px;
-  margin-left: auto;
+  gap: 5px;
+  margin-left: 0;
   margin-right: 0;
+}
+.canvas-actions button {
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+.canvas-settings {
+  position: absolute;
+  z-index: 30;
+  top: 60px;
+  right: 12px;
+  display: grid;
+  gap: 12px;
+  width: min(300px, calc(100vw - 24px));
+  padding: 14px;
+  border: 1px solid #435c6c;
+  border-radius: 10px;
+  background: #162834f5;
+  box-shadow: 0 14px 36px #0009;
+}
+.canvas-settings header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.canvas-settings header button {
+  padding: 2px 8px;
+}
+.canvas-settings label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 5px 12px;
+  color: #c3d1da;
+  font-size: 12px;
+}
+.canvas-settings label > input,
+.canvas-settings label > select {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0;
+}
+.canvas-settings label > input[type='color'] {
+  height: 34px;
+  padding: 3px;
+}
+.canvas-settings label.settings-toggle {
+  display: flex;
+  justify-content: space-between;
+}
+.canvas-settings label.settings-toggle > input[type='checkbox'] {
+  width: auto;
 }
 .sync-message {
   position: absolute;
@@ -4139,8 +4729,8 @@ nav small {
   max-width: 50%;
 }
 .canvas-host {
-  flex: 1;
-  position: relative;
+  position: absolute;
+  inset: 0;
   min-height: 0;
   overflow: hidden;
   background: #101b25;
@@ -4273,7 +4863,7 @@ nav small {
   align-items: center;
   gap: 8px;
   right: 15px;
-  top: 15px;
+  top: 62px;
   color: var(--muted);
   font-size: 10px;
 }
@@ -4283,14 +4873,17 @@ nav small {
   }
 }
 .inspector {
+  box-sizing: border-box;
   position: absolute;
-  top: 80px;
+  top: 64px;
   right: 12px;
-  bottom: 40px;
-  width: 370px;
-  max-width: 90%;
+  height: calc(100vh - 88px);
+  max-height: calc(100vh - 76px);
+  min-width: 360px;
+  max-width: 96vw;
   overflow: auto;
-  padding: 20px;
+  resize: horizontal;
+  padding: 16px 20px 24px;
   background: #162834f5;
   border: 1px solid #435c6c;
   border-radius: 12px;
@@ -4359,6 +4952,23 @@ nav small {
 .inspector pre {
   max-height: 270px;
   overflow: auto;
+}
+.inspector-source {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.inspector-source pre.source-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+}
+.inspector textarea {
+  min-height: clamp(150px, 24vh, 360px);
 }
 .run-approval {
   padding: 12px;
@@ -4458,6 +5068,10 @@ nav small {
   z-index: 200;
   cursor: pointer;
 }
+.toast.notice {
+  background: #244d42;
+  border: 1px solid #4a8b72;
+}
 .error {
   color: #e0aa9f !important;
 }
@@ -4480,14 +5094,24 @@ nav small {
 @media (max-width: 900px) {
   .floating-brand {
     top: 8px;
-    padding: 4px 6px;
   }
-  .floating-brand select {
-    width: min(240px, 52vw);
+  nav.canvas-navigation {
+    top: 8px;
+    right: 8px;
+    max-width: calc(100vw - 64px);
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
-  .canvas-navigation {
-    padding-top: 62px;
-    padding-left: 12px;
+  .navigation-location {
+    max-width: 100%;
+  }
+  .canvas-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .canvas-actions button {
+    padding: 5px 7px;
+    font-size: 11px;
   }
 }
 </style>

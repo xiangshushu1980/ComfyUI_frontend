@@ -84,7 +84,7 @@ export function propose(store, projectId, body) {
     contentHash: hash({ items: body.items, basis })
   })
 }
-export function adopt(store, id, body) {
+export function adopt(store, id, body, actor = 'human') {
   const p = store.get(id)
   requireThat(
     p.kind === 'proposal' && p.status === 'pending',
@@ -136,12 +136,16 @@ export function adopt(store, id, body) {
         i.name.trim(),
       'entity type/name required'
     )
+    const isNew = !i.targetId
     const fields = {
       type: i.type,
       name: i.name,
       description: i.description || '',
       sources: i.sources || [],
-      proposalId: p.id
+      proposalId: p.id,
+      ...(actor === 'agent_auto' && isNew
+        ? { origin: 'ai_agent', flags: ['ai-created'] }
+        : {})
     }
     const entity = i.targetId
       ? store.update(i.targetId, i.expectedRevision, fields)
@@ -197,7 +201,7 @@ export function adopt(store, id, body) {
     selectedKeys: body.selectedKeys,
     mapping: map,
     adoptedIds: adopted.map((i) => i.id),
-    actor: 'human',
+    actor,
     sources: selected.flatMap((i) => i.sources || [])
   })
   for (const item of selected)

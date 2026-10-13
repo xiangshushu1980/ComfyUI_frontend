@@ -11,6 +11,106 @@ const workflowSkillRegistry = JSON.parse(
     'utf8'
   )
 )
+const contextFields = new Set([
+  'name',
+  'type',
+  'description',
+  'text',
+  'status',
+  'role',
+  'flags',
+  'sources',
+  'sourceId',
+  'anchorIds',
+  'sourceRevision',
+  'order',
+  'start',
+  'end',
+  'brief',
+  'contentHash',
+  'entityId',
+  'assetId',
+  'sourceResourceIds',
+  'workflowRunId',
+  'targetId',
+  'targetEntityId',
+  'inputs',
+  'outputs',
+  'parameters',
+  'executionRelations',
+  'childRunIds',
+  'referenceAssetIds',
+  'presetId',
+  'appearanceAssetId',
+  'appearanceSelectionId',
+  'voiceAssetId',
+  'voiceRunId',
+  'voiceDesign',
+  'voiceDescription',
+  'selectedAssetId',
+  'selectedReferenceIds',
+  'conceptPlanId',
+  'conceptId',
+  'proposalId',
+  'origin',
+  'stage',
+  'mode',
+  'progress',
+  'error',
+  'cancellationReason',
+  'confirmed',
+  'confirmedAt',
+  'approvedAt',
+  'approvedBy',
+  'completedAt',
+  'removedAt',
+  'supersededBy',
+  'canvasHidden',
+  'resultSelectionId',
+  'entityRevision',
+  'visualStylePresetId',
+  'visualStyleRevision',
+  'fromId',
+  'toId',
+  'parentId',
+  'conceptBriefId',
+  'conceptPromptId'
+])
+const contextRelationFields = [
+  'entityId',
+  'sourceId',
+  'targetId',
+  'workflowRunId',
+  'parentId',
+  'fromId',
+  'toId',
+  'conceptBriefId',
+  'conceptPromptId',
+  'sourceResourceIds',
+  'inputs',
+  'outputs'
+]
+const comparable = (value) => JSON.stringify(value)
+const deltaValue = (value) => {
+  if (value === undefined) return null
+  if (
+    typeof value === 'string' &&
+    value.length > 4000
+  )
+    return { preview: value.slice(0, 4000), truncated: true }
+  if (Array.isArray(value) && value.length > 40)
+    return { items: value.slice(0, 40), truncated: true }
+  return value
+}
+const identity = (object) =>
+  object
+    ? {
+        id: object.id,
+        kind: object.kind,
+        name: object.name || '',
+        revision: object.revision
+      }
+    : null
 export class PiBridge {
   constructor(
     store,
@@ -313,9 +413,14 @@ export class PiBridge {
       'invalid receipt',
       403
     )
-    return this.store.transaction(() =>
-      this.store.update(turn.id, turn.revision, { status: 'finished' })
-    )
+    return this.store.transaction(() => {
+      if (Number.isInteger(turn.contextThroughSeq))
+        this.store.compatSet(
+          `agent-context-cursor:${turn.discussionId}`,
+          turn.contextThroughSeq
+        )
+      return this.store.update(turn.id, turn.revision, { status: 'finished' })
+    })
   }
   async launch(discussionId, body) {
     let b = await this.prepareWorkspace(discussionId)
@@ -562,6 +667,336 @@ export class PiBridge {
     )
   }
   tool(capability, body) {
+    const priorActor = this.store.eventActor
+    this.store.eventActor = `agent:${body.turnId}`
+    try {
+      return this.runTool(capability, body)
+    } finally {
+      this.store.eventActor = priorActor
+    }
+  }
+  canvasChanges(turn, workflowSession, workflowContext) {
+    if (Number.isInteger(turn.contextThroughSeq)) return turn.canvasChanges || null
+
+    const projectId = turn.projectId
+    const cursorKey = `agent-context-cursor:${turn.discussionId}`
+    const highWater = this.store.eventCursor(projectId)
+    const storedCursor = this.store.compatGet(cursorKey, null)
+    const cursor = Number.isInteger(storedCursor)
+      ? storedCursor
+      : highWater
+    const visible = new Map(
+      (workflowContext?.objects || []).map((item) => [item.id, item])
+    )
+    const targetId = workflowSession.targetId
+    const scopeIds = new Set(
+      [targetId, workflowSession.contextId, ...visible.keys()].filter(Boolean)
+    )
+    const scopeObjects = [targetId, workflowSession.contextId]
+      .filter((id) => id && id !== projectId)
+      .map((id) => {
+        try {
+          return this.store.sameProject(id, projectId)
+        } catch {
+          return null
+        }
+      })
+      .filter(Boolean)
+    const scopeEvidence = new Set(
+      scopeObjects.flatMap((object) => [
+        ...(object.sources || []).map((source) => `${source.sourceId}:${source.anchorId}`),
+        ...(object.sourceId
+          ? (object.anchorIds || []).map((anchorId) => `${object.sourceId}:${anchorId}`)
+          : [])
+      ])
+    )
+    const changed = new Map()
+    let after = cursor
+    while (after < highWater) {
+      const page = this.store
+        .events(projectId, after)
+        .filter((event) => event.seq <= highWater)
+      if (!page.length) break
+      for (const event of page) {
+        after = event.seq
+        if (event.actor?.startsWith('agent:')) continue
+        const data = event.data || {}
+        if (event.type === 'project.settings_updated') {
+          if (data.settings?.visualStyle)
+            changed.set('project-style', {
+              id: `project-style:${projectId}`,
+              kind: 'project_style',
+              name: '全局风格',
+              action: 'updated',
+              revision:
+                data.settings.visualStyle.revision || data.revision,
+              value: {
+                visualStyle: {
+                  ...data.settings.visualStyle,
+                  text: deltaValue(String(data.settings.visualStyle.text || ''))
+                }
+              }
+            })
+          continue
+        }
+        const linkedIds = [
+          data.entityId,
+          data.parentId,
+          data.workflowSessionId,
+          data.workflowRunId,
+          data.sourceId,
+          data.targetId,
+          data.fromId,
+          data.toId
+        ]
+        const evidenceRelated = (data.sources || []).some((source) =>
+          scopeEvidence.has(`${source.sourceId}:${source.anchorId}`)
+        )
+        const relevant =
+          visible.has(data.id) ||
+          data.id === targetId ||
+          linkedIds.some((id) => scopeIds.has(id)) ||
+          evidenceRelated
+        if (!relevant || !data.id) continue
+        const prior = changed.get(data.id)
+        changed.set(data.id, {
+          id: data.id,
+          kind: data.kind || prior?.kind || visible.get(data.id)?.kind,
+          name: data.name || prior?.name || visible.get(data.id)?.name || '',
+          fromRevision: prior?.fromRevision ?? Math.max(0, (data.revision || 1) - 1),
+          revision: data.revision || prior?.revision || 1,
+          action: prior?.action === 'created' || event.type.endsWith('.created')
+            ? 'created'
+            : data.status === 'removed'
+              ? 'removed'
+              : 'updated',
+          value: data
+        })
+      }
+      if (page.length < 1000) break
+    }
+    const items = [...changed.values()].map((change) => {
+      if (change.kind === 'project_style')
+        return {
+          id: change.id,
+          kind: change.kind,
+          name: change.name,
+          action: change.action,
+          revision: change.revision,
+          fields: {
+            visualStyle: {
+              before: null,
+              after: change.value.visualStyle
+            }
+          }
+        }
+      const before =
+        change.fromRevision > 0
+          ? this.store.get(change.id, change.fromRevision)
+          : null
+      const fields = Object.fromEntries(
+        [...contextFields]
+          .filter(
+            (field) =>
+              comparable(before?.[field]) !== comparable(change.value?.[field])
+          )
+          .map((field) => [
+            field,
+            {
+              before: deltaValue(before?.[field]),
+              after: deltaValue(change.value?.[field])
+            }
+          ])
+      )
+      return {
+        id: change.id,
+        kind: change.kind,
+        name: change.name,
+        action: change.action,
+        fromRevision: change.fromRevision || null,
+        revision: change.revision,
+        fields
+      }
+    })
+    const changes = {
+      items,
+      count: items.length,
+      throughSeq: highWater
+    }
+    this.store.update(turn.id, turn.revision, {
+      contextThroughSeq: highWater,
+      canvasChanges: changes
+    })
+    return changes
+  }
+  workflowFrame(workflowSession, workflowContext) {
+    const contextObjects = workflowContext?.objects || []
+    const target = contextObjects.find(
+      (object) => object.id === workflowSession.targetId
+    )
+    const context = contextObjects.find(
+      (object) => object.id === workflowSession.contextId
+    )
+    const project = this.store.project(workflowSession.projectId)
+    return {
+      session: {
+        id: workflowSession.id,
+        workflowId: workflowSession.workflowId,
+        targetId: workflowSession.targetId,
+        contextId: workflowSession.contextId,
+        status: workflowSession.status
+      },
+      target: identity(target),
+      context: identity(context),
+      project: { name: project.name },
+      generationMode: workflowContext?.generationMode || null
+    }
+  }
+  queryWorkflowContext(turn, workflowSession, workflowContext, args = {}) {
+    const scope = args.scope || 'changes'
+    if (scope === 'changes')
+      return {
+        scope,
+        canvasChanges: this.canvasChanges(turn, workflowSession, workflowContext)
+      }
+    if (scope === 'project_settings') {
+      const keys = args.keys || ['visualStyle']
+      requireThat(
+        Array.isArray(keys) && keys.length <= 10 && keys.every((key) => key === 'visualStyle'),
+        'project settings query only supports visualStyle'
+      )
+      const project = this.store.project(workflowSession.projectId)
+      return {
+        scope,
+        project: { name: project.name },
+        settings: Object.fromEntries(
+          keys.map((key) => [key, project.settings?.[key] ?? null])
+        )
+      }
+    }
+
+    const allowed = new Map(
+      (workflowContext?.objects || []).map((object) => [object.id, object])
+    )
+    const limit = Math.min(50, Math.max(1, Number(args.limit) || 20))
+    const offset = Math.max(0, Number(args.offset) || 0)
+    const requestedFields = args.fields || [
+      'name',
+      'type',
+      'description',
+      'status',
+      'role',
+      'flags'
+    ]
+    requireThat(
+      Array.isArray(requestedFields) &&
+        requestedFields.length <= contextFields.size &&
+        requestedFields.every((field) => contextFields.has(field) || field === 'all'),
+      'unsupported context fields'
+    )
+    const fields = requestedFields.includes('all')
+      ? [...contextFields]
+      : requestedFields
+
+    let candidates = []
+    if (scope === 'target') {
+      const seeds = new Set(
+        [workflowSession.targetId, workflowSession.contextId].filter(Boolean)
+      )
+      candidates = [...allowed.values()].filter(
+        (object) =>
+          seeds.has(object.id) ||
+          contextRelationFields.some((field) => {
+            const value = object[field]
+            return Array.isArray(value)
+              ? value.some((item) => seeds.has(item?.id || item))
+              : seeds.has(value)
+          })
+      )
+    } else if (scope === 'ids') {
+      requireThat(
+        Array.isArray(args.ids) && args.ids.length > 0 && args.ids.length <= 50,
+        'ids scope requires 1..50 object IDs'
+      )
+      candidates = args.ids.map((id) => {
+        requireThat(allowed.has(id), 'object is outside the active Workflow context', 403)
+        return allowed.get(id)
+      })
+    } else if (scope === 'kind') {
+      requireThat(
+        Array.isArray(args.kinds) && args.kinds.length > 0 && args.kinds.length <= 10,
+        'kind scope requires object kinds'
+      )
+      candidates = [...allowed.values()].filter((object) =>
+        args.kinds.includes(object.kind)
+      )
+    } else if (scope === 'related') {
+      const startId = args.objectId || workflowSession.targetId || workflowSession.contextId
+      requireThat(allowed.has(startId), 'object is outside the active Workflow context', 403)
+      const depth = Math.min(3, Math.max(1, Number(args.depth) || 1))
+      let frontier = new Set([startId])
+      const selected = new Set(frontier)
+      for (let level = 0; level < depth; level++) {
+        const next = new Set()
+        for (const object of allowed.values()) {
+          if (selected.has(object.id)) continue
+          const linked = contextRelationFields.some((field) => {
+            const value = object[field]
+            return Array.isArray(value)
+              ? value.some((item) => frontier.has(item?.id || item))
+              : frontier.has(value)
+          })
+          if (linked) next.add(object.id)
+        }
+        for (const id of next) selected.add(id)
+        frontier = next
+        if (!frontier.size) break
+      }
+      candidates = [...selected].map((id) => allowed.get(id))
+    } else if (scope === 'search') {
+      const query = String(args.query || '').trim().toLocaleLowerCase()
+      requireThat(query.length > 0 && query.length <= 160, 'search query required')
+      let searchable = [...allowed.values()]
+      if (args.projectEntities === true) {
+        requireThat(
+          workflowSession.workflowId === 'ExtractEntities',
+          'project entity search is only available in ExtractEntities',
+          403
+        )
+        for (const entity of this.store.list(workflowSession.projectId, 'entity'))
+          if (!allowed.has(entity.id)) allowed.set(entity.id, entity)
+        searchable = [...allowed.values()].filter((object) => object.kind === 'entity')
+      }
+      candidates = searchable.filter((object) => {
+        if (args.kinds?.length && !args.kinds.includes(object.kind)) return false
+        return ['name', 'type', 'description', 'text'].some((field) =>
+          String(object[field] || '').toLocaleLowerCase().includes(query)
+        )
+      })
+    } else requireThat(false, 'unsupported Workflow context scope')
+
+    const selected = candidates.slice(offset, offset + limit).map((object) => {
+      const result = {
+        id: object.id,
+        kind: object.kind,
+        revision: object.revision
+      }
+      for (const field of fields) {
+        if (object[field] === undefined) continue
+        result[field] = deltaValue(object[field])
+      }
+      return result
+    })
+    return {
+      scope,
+      count: candidates.length,
+      offset,
+      limit,
+      nextOffset: offset + selected.length < candidates.length ? offset + selected.length : null,
+      objects: selected
+    }
+  }
+  runTool(capability, body) {
     const binding = this.authenticate(capability, body.sessionId),
       turn = this.store.sameProject(body.turnId, binding.projectId, 'pi_turn')
     requireThat(
@@ -719,10 +1154,9 @@ export class PiBridge {
               prompt:
                 'required for prepare_concept and generate_concept; generate_concept uses the saved paired prompt',
               description: 'prepare_concept: user-confirmed visual description, max 12000 chars; creates a branch under the entity root',
+              conceptId: 'prepare_concept: optional positive concept branch number; update that exact existing branch. Omit to create a new numbered branch or update this conversation’s branch',
               confirmedPlan:
-                'prepare_concept: true only after the user confirms the concept direction, reference usage and style scope in this conversation',
-              visualStyle:
-                'prepare_concept: optional style for this image only; use when the user confirms a one-image style and does not want to change project-wide style',
+                'prepare_concept: true only after the user confirms the concept direction, annotated reference usage and project-wide visual style in this conversation',
               style:
                 'set_project_style: project-wide visual style explicitly confirmed by the user',
               confirmed:
@@ -756,7 +1190,19 @@ export class PiBridge {
               'Workflow Run or child Run UUID; business result includes child states'
           },
           view_image: { assetId: 'UUID; requires verified image model' },
-          context: {},
+          context: {
+            scope: 'changes (default), target, related, ids, kind, search, project_settings',
+            objectId: 'related: workflow-visible object UUID; depth is bounded to 3',
+            ids: 'ids: 1..50 object UUIDs already visible to the active Workflow',
+            kinds: 'kind/search: object kinds to filter before returning data',
+            query: 'search: required text; searches only Workflow-visible objects unless projectEntities=true',
+            projectEntities: 'search only: true is permitted only for ExtractEntities and searches entity candidates server-side',
+            keys: 'project_settings: currently only visualStyle',
+            fields: 'requested fields: name, type, description, text, status, role, flags, sources, anchorIds, and supported linkage fields; defaults omit long text',
+            depth: 'related graph depth, 1..3; default 1',
+            limit: 'maximum 50 results, default 20',
+            offset: 'pagination offset, default 0'
+          },
           read_source: {
             id: 'sourceId',
             anchorId: 'optional paragraph ID; omit for paged anchor index',
@@ -788,11 +1234,34 @@ export class PiBridge {
           }
         }
       }
-    if (body.tool === 'context')
+    if (body.tool === 'context') {
+      const workflowContext = workflowSession
+        ? this.workflows.context(workflowSession.id)
+        : null
+      const canvasChanges = workflowSession
+        ? this.canvasChanges(turn, workflowSession, workflowContext)
+        : null
+      if (workflowSession && args.scope && args.scope !== 'changes')
+        return {
+          workflow: this.workflowFrame(workflowSession, workflowContext),
+          goal: this.store.get(turn.discussionId).goal,
+          ...this.queryWorkflowContext(
+            turn,
+            workflowSession,
+            workflowContext,
+            args
+          )
+        }
+      if (workflowSession)
+        return {
+          workflow: this.workflowFrame(workflowSession, workflowContext),
+          canvasChanges,
+          goal: this.store.get(turn.discussionId).goal,
+          actionId: turn.actionId || null
+        }
       return {
-        workflow: workflowSession
-          ? this.workflows.context(workflowSession.id)
-          : null,
+        workflow: null,
+        canvasChanges: null,
         goal: this.store.get(turn.discussionId).goal,
         context: (turn.context || []).map((item) => ({
           kind: item.kind,
@@ -815,6 +1284,7 @@ export class PiBridge {
               })),
         actionId: turn.actionId || null
       }
+    }
     if (body.tool === 'read_source' || body.tool === 'read_entity') {
       const o = this.store.sameProject(args.id, turn.projectId)
       requireThat(
@@ -1015,7 +1485,12 @@ export class PiBridge {
       'native PI guard not verified',
       503
     )
-    const context = body.context || []
+    const workflow = this.store
+      .list(d.projectId, 'workflow_session')
+      .find((session) => session.discussionId === discussionId)
+    const context = workflow
+      ? this.workflows.context(workflow.id).objects
+      : body.context || []
     for (const c of context)
       requireThat(
         this.store.sameProject(c.id, d.projectId).revision === c.revision,

@@ -50,6 +50,28 @@ const terminal = new Set([
   'paused_generation_mode'
 ])
 const ref = (o) => ({ id: o.id, revision: o.revision, kind: o.kind })
+const hasReferenceNote = (resource) =>
+  resource.role !== 'reference' || Boolean(String(resource.description || '').trim())
+const defaultProjectStyle =
+  '电影感写实，真实材质与自然光，统一色彩和镜头质感；保持角色与物体设定一致，不添加未指定元素。'
+const projectVisualStyle = (project) => {
+  const saved = project.settings?.visualStyle
+  if (typeof saved === 'string' && saved.trim())
+    return { text: saved.trim(), presetId: 'custom', confirmed: true, revision: 1 }
+  if (saved?.text)
+    return {
+      ...saved,
+      text: String(saved.text),
+      confirmed: saved.confirmed === true,
+      revision: Number(saved.revision || 0)
+    }
+  return {
+    text: defaultProjectStyle,
+    presetId: 'cinematic_realism',
+    confirmed: false,
+    revision: 0
+  }
+}
 export class Workflows {
   constructor(store, execution) {
     this.store = store
@@ -100,6 +122,65 @@ export class Workflows {
     })
     this.relation(entity.projectId, entity.id, introduction.id, 'owns')
     return introduction
+  }
+  conceptBranchMetadata(projectId, entityId) {
+    const objects = this.store.list(projectId)
+    const resources = objects.filter(
+      (object) => object.kind === 'resource' && object.entityId === entityId
+    )
+    const briefs = resources.filter((resource) => resource.role === 'concept_brief')
+    const used = new Set(
+      briefs
+        .map((brief) => brief.conceptId)
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+    const briefIds = new Map()
+    let next = 1
+    for (const brief of briefs) {
+      let id = brief.conceptId
+      if (!Number.isInteger(id) || id < 1) {
+        while (used.has(next)) next++
+        id = next++
+        used.add(id)
+      }
+      briefIds.set(brief.id, id)
+    }
+    const resourceIds = new Map()
+    for (const brief of briefs) {
+      const id = briefIds.get(brief.id)
+      resourceIds.set(brief.id, id)
+      const prompt = resources.find(
+        (resource) =>
+          resource.role === 'concept_prompt' &&
+          ((brief.conceptPlanId &&
+            resource.conceptPlanId === brief.conceptPlanId) ||
+            resource.sourceResourceIds?.includes(brief.id))
+      )
+      if (prompt) resourceIds.set(prompt.id, id)
+    }
+    const runs = objects.filter(
+      (object) =>
+        object.kind === 'workflow_run' &&
+        object.targetId === entityId &&
+        object.stage === 'concept'
+    )
+    const runIds = new Map()
+    for (const run of runs) {
+      const id =
+        run.conceptId ||
+        (run.inputs || [])
+          .map((input) => resourceIds.get(input.id))
+          .find((value) => Number.isInteger(value))
+      if (!Number.isInteger(id) || id < 1) continue
+      runIds.set(run.id, id)
+      for (const resource of resources)
+        if (resource.workflowRunId === run.id) resourceIds.set(resource.id, id)
+    }
+    return { briefs, resources, briefIds, resourceIds, runIds }
+  }
+  nextConceptId(projectId, entityId) {
+    const { briefIds } = this.conceptBranchMetadata(projectId, entityId)
+    return Math.max(0, ...briefIds.values()) + 1
   }
   open(projectId, body) {
     this.store.project(projectId)
@@ -179,7 +260,7 @@ export class Workflows {
       links: [],
       status: 'idle'
     })
-    return this.store.create(projectId, 'workflow_session', {
+    const session = this.store.create(projectId, 'workflow_session', {
       name: sessionName,
       workflowId: definition.id,
       definitionVersion: definition.version,
@@ -191,6 +272,11 @@ export class Workflows {
       createdAt: new Date().toISOString(),
       closed: false
     })
+    this.store.compatSet(
+      `agent-context-cursor:${discussion.id}`,
+      this.store.eventCursor(projectId)
+    )
+    return session
   }
   session(id) {
     const session = this.store.get(id)
@@ -292,6 +378,9 @@ export class Workflows {
             (!context || context.kind !== 'entity' || o.id === context.id)) ||
           (o.kind === 'workflow_run' && o.sessionId === id))
     )
+    const conceptBranches = target
+      ? this.conceptBranchMetadata(session.projectId, target.id)
+      : null
     // References plus chapter ranges; never inject an entire novel into the system prompt.
     return {
       session,
@@ -300,7 +389,16 @@ export class Workflows {
         this.execution.mode === 'mock'
           ? '模拟模式：图片与声音均为本地合成预览，不会调用生成模型或 ComfyUI。'
           : '真实生成模式：Agent 只整理概念图方案；画布确认后提交图像 Run，正式形象采用由用户确认。三视图和声音暂缓。',
-      project: this.store.project(session.projectId),
+      project: (() => {
+        const current = this.store.project(session.projectId)
+        return {
+          ...current,
+          settings: {
+            ...(current.settings || {}),
+            visualStyle: projectVisualStyle(current)
+          }
+        }
+      })(),
       context: context
         ? { ...ref(context), name: context.name, kind: context.kind }
         : null,
@@ -313,7 +411,14 @@ export class Workflows {
         type: o.type,
         assetId: o.assetId,
         sourceResourceIds: o.sourceResourceIds,
+        conceptPlanId: o.conceptPlanId,
+        workflowSessionId: o.workflowSessionId,
         workflowRunId: o.workflowRunId,
+        conceptId:
+          conceptBranches?.briefIds.get(o.id) ??
+          conceptBranches?.resourceIds.get(o.id) ??
+          conceptBranches?.runIds.get(o.id) ??
+          o.conceptId,
         entityId: o.entityId,
         status: o.status,
         description: o.description,
@@ -606,10 +711,22 @@ export class Workflows {
       outputs: [proposal.id]
     })
     this.store.update(s.id, s.revision, { status: 'waiting_confirmation' })
-    return { run: this.store.get(run.id), proposal }
+    const autoCreatedKeys = body.items
+      .filter((item) => item.kind === 'entity' && !item.targetId)
+      .map((item) => item.key)
+    if (autoCreatedKeys.length)
+      this.confirmCandidate(
+        proposal.id,
+        { expectedHash: proposal.contentHash, selectedKeys: autoCreatedKeys },
+        'agent_auto'
+      )
+    return {
+      run: this.store.get(run.id),
+      proposal: this.store.get(proposal.id)
+    }
   }
-  confirmCandidate(proposalId, body) {
-    const result = adopt(this.store, proposalId, body)
+  confirmCandidate(proposalId, body, actor = 'human') {
+    const result = adopt(this.store, proposalId, body, actor)
     const p = this.store.get(proposalId)
     for (const entity of result.adopted.filter((o) => o.kind === 'entity')) {
       this.ensureEntityIntroduction(entity)
@@ -967,6 +1084,22 @@ export class Workflows {
       status: 'removed',
       removedAt
     })
+    if (resource.role === 'concept_brief') {
+      const pairedPrompts = this.store.list(projectId, 'resource').filter(
+        (item) =>
+          item.entityId === resource.entityId &&
+          item.role === 'concept_prompt' &&
+          item.status !== 'removed' &&
+          ((resource.conceptPlanId &&
+            item.conceptPlanId === resource.conceptPlanId) ||
+            item.sourceResourceIds?.includes(resource.id))
+      )
+      for (const prompt of pairedPrompts)
+        this.store.update(prompt.id, prompt.revision, {
+          status: 'removed',
+          removedAt
+        })
+    }
     return removed
   }
   removeCanvasNode(projectId, id, body) {
@@ -1016,24 +1149,30 @@ export class Workflows {
     )
     return this.updateEntityProfileData(entity.id, body)
   }
-  setProjectStyle(sessionId, body) {
-    const session = this.session(sessionId)
-    requireThat(session.workflowId === 'CreateEntity', 'use entity creation Workflow', 403)
-    requireThat(body.confirmed === true, 'user confirmation required to save project visual style', 403)
+  updateProjectStyle(projectId, body) {
+    const current = this.store.project(projectId)
     const style = String(body.style || '').trim()
     requireThat(style.length > 0 && style.length <= 2000, 'visual style required (max 2000 chars)')
     return this.store.updateProjectSettings(
-      session.projectId,
+      projectId,
       body.expectedProjectRevision,
       {
         visualStyle: {
           text: style,
+          presetId: String(body.presetId || 'custom'),
           confirmed: true,
           confirmedAt: new Date().toISOString(),
-          source: 'user'
+          source: 'user',
+          revision: Number(current.settings?.visualStyle?.revision || 0) + 1
         }
       }
     )
+  }
+  setProjectStyle(sessionId, body) {
+    const session = this.session(sessionId)
+    requireThat(session.workflowId === 'CreateEntity', 'use entity creation Workflow', 403)
+    requireThat(body.confirmed === true, 'user confirmation required to save project visual style', 403)
+    return this.updateProjectStyle(session.projectId, body)
   }
   authorize(sessionId, body) {
     const s = this.session(sessionId)
@@ -1136,12 +1275,15 @@ export class Workflows {
     const entity = this.store.sameProject(s.targetId, s.projectId, 'entity')
     const description = String(body.description || '').trim()
     const prompt = String(body.prompt || '').trim()
-    const style = String(body.visualStyle || '').trim()
     requireThat(body.confirmedPlan === true, 'user must confirm concept direction first', 403)
     requireThat(description.length > 0 && description.length <= 12000, 'description required (max 12000 chars)')
     requireThat(prompt.length > 0 && prompt.length <= 12000, 'prompt required (max 12000 chars)')
-    const projectStyle = this.store.project(s.projectId).settings?.visualStyle
-    requireThat((projectStyle?.confirmed === true && String(projectStyle.text || '').trim()) || style, 'confirmed visual style required', 422)
+    const projectStyle = projectVisualStyle(this.store.project(s.projectId))
+    requireThat(
+      projectStyle.confirmed && projectStyle.text.trim(),
+      'confirm the project-wide visual style before planning',
+      422
+    )
     const grant = this.grant(sessionId, 'concept')
     const assets = body.referenceIds || s.selectedReferenceIds || []
     requireThat(Array.isArray(assets) && assets.length <= 16, 'invalid reference images')
@@ -1152,14 +1294,33 @@ export class Workflows {
       )
     )
     requireThat(referenceResources.every(Boolean), 'references must belong to this entity')
+    const notedReferences = referenceResources.filter(hasReferenceNote)
     const intro = this.ensureEntityIntroduction(entity)
-    const existingBrief = this.store.list(s.projectId, 'resource').findLast((resource) => resource.entityId === entity.id && resource.role === 'concept_brief' && resource.workflowSessionId === s.id && resource.status !== 'removed')
-    const existingPrompt = existingBrief && this.store.list(s.projectId, 'resource').find((resource) => resource.entityId === entity.id && resource.role === 'concept_prompt' && resource.conceptPlanId === existingBrief.conceptPlanId && resource.status !== 'removed')
-    const sourceResourceIds = [intro.id, ...referenceResources.map((resource) => resource.id)]
-    const conceptPlanId = existingBrief?.conceptPlanId || `concept-plan:${s.id}:${Date.now()}`
+    const branchMetadata = this.conceptBranchMetadata(s.projectId, entity.id)
+    requireThat(
+      body.conceptId === undefined ||
+        (Number.isInteger(body.conceptId) && body.conceptId > 0),
+      'conceptId must be a positive integer'
+    )
+    const existingBrief = body.conceptId === undefined
+      ? branchMetadata.briefs.findLast((resource) => resource.workflowSessionId === s.id && resource.status !== 'removed') || null
+      : branchMetadata.briefs.find((resource) => branchMetadata.briefIds.get(resource.id) === body.conceptId && resource.status !== 'removed') || null
+    if (body.conceptId !== undefined)
+      requireThat(existingBrief, `concept ${body.conceptId} does not exist`, 404)
+    const conceptId = existingBrief
+      ? branchMetadata.briefIds.get(existingBrief.id)
+      : this.nextConceptId(s.projectId, entity.id)
+    const existingPrompt = existingBrief && branchMetadata.resources.find((resource) =>
+      resource.role === 'concept_prompt' && resource.status !== 'removed' &&
+      ((existingBrief.conceptPlanId && resource.conceptPlanId === existingBrief.conceptPlanId) || resource.sourceResourceIds?.includes(existingBrief.id))
+    )
+    const sourceResourceIds = [intro.id, ...notedReferences.map((resource) => resource.id)]
+    const conceptPlanId = existingBrief?.conceptPlanId || `concept-plan:${entity.id}:${conceptId}`
     const briefFields = {
+      name: `概念图 ${conceptId} · 设计说明`,
+      conceptId,
       text: description,
-      visualStyle: style || projectStyle?.text || null,
+      visualStyle: projectStyle.text,
       sourceResourceIds,
       workflowSessionId: s.id,
       conceptPlanId,
@@ -1168,22 +1329,23 @@ export class Workflows {
     const brief = existingBrief
       ? this.store.update(existingBrief.id, existingBrief.revision, briefFields)
       : this.store.create(s.projectId, 'resource', {
-          name: '概念图设计说明', entityId: entity.id, role: 'concept_brief', type: 'text',
+          name: `概念图 ${conceptId} · 设计说明`, entityId: entity.id, role: 'concept_brief', type: 'text', conceptId,
           description: '', parentId: entity.id, ...briefFields
         })
-    const promptSources = [brief.id, intro.id, ...referenceResources.map((resource) => resource.id)]
+    const promptSources = [brief.id, intro.id, ...notedReferences.map((resource) => resource.id)]
     const promptNode = existingPrompt
       ? this.store.update(existingPrompt.id, existingPrompt.revision, {
+          name: `概念图 ${conceptId} · 提示词`,
           text: prompt, sourceResourceIds: promptSources, workflowSessionId: s.id,
-          conceptPlanId, status: 'available'
+          conceptPlanId, conceptId, status: 'available'
         })
       : this.store.create(s.projectId, 'resource', {
-          name: 'Qwen Image 2.1 概念图提示词', entityId: entity.id,
+          name: `概念图 ${conceptId} · 提示词`, entityId: entity.id, conceptId,
           role: 'concept_prompt', type: 'text', description: '', parentId: entity.id,
           text: prompt, sourceResourceIds: promptSources, workflowSessionId: s.id,
-          conceptPlanId, status: 'available'
+          conceptPlanId, conceptId, status: 'available'
         })
-    return { brief, prompt: promptNode, remainingCandidates: grant.conceptRemaining }
+    return { conceptId, brief, prompt: promptNode, remainingCandidates: grant.conceptRemaining }
   }
   generate(sessionId, body, stage = 'concept') {
     const s = this.session(sessionId)
@@ -1196,6 +1358,12 @@ export class Workflows {
       403
     )
     const entity = this.store.sameProject(s.targetId, s.projectId, 'entity')
+    const projectStyle = projectVisualStyle(this.store.project(s.projectId))
+    requireThat(
+      projectStyle.confirmed && projectStyle.text.trim(),
+      'confirm the project-wide visual style before generating',
+      422
+    )
     const grant = this.grant(sessionId, stage)
     const resources = this.store
       .list(s.projectId, 'resource')
@@ -1211,7 +1379,8 @@ export class Workflows {
               'appearance_current'
             ].includes(r.role) &&
             r.type === 'image' &&
-            r.assetId
+            r.assetId &&
+            hasReferenceNote(r)
         )
         .map((r) => r.assetId)
     )
@@ -1275,13 +1444,16 @@ export class Workflows {
         409
       )
       requireThat(reuseBrief.status !== 'needs_refresh' && reusePrompt.status !== 'needs_refresh', 'concept prompt needs agent update', 409)
+      const mappedConceptId = this.conceptBranchMetadata(s.projectId, entity.id).briefIds.get(reuseBrief.id)
+      requireThat(body.conceptId === undefined || body.conceptId === mappedConceptId, 'conceptId does not match the selected concept branch', 409)
+      body = { ...body, conceptId: mappedConceptId }
       body = {
         ...body,
         description: reuseBrief.text,
         prompt: reusePrompt.text,
         visualStyle: reuseBrief.visualStyle || body.visualStyle,
         referenceIds: resources
-          .filter((resource) => reuseBrief.sourceResourceIds?.includes(resource.id) && resource.type === 'image')
+          .filter((resource) => reuseBrief.sourceResourceIds?.includes(resource.id) && resource.type === 'image' && hasReferenceNote(resource))
           .map((resource) => resource.assetId)
       }
       assets = body.referenceIds
@@ -1297,6 +1469,9 @@ export class Workflows {
         }
       })
     }
+    const conceptId = stage === 'concept'
+      ? (reuseBrief ? body.conceptId : this.nextConceptId(s.projectId, entity.id))
+      : undefined
     const count =
       stage === 'threeview'
         ? 1
@@ -1319,7 +1494,6 @@ export class Workflows {
       'prompt required (max 12000 chars)'
     )
     const conceptDescription = String(body.description || '').trim()
-    const conceptStyle = String(body.visualStyle || '').trim()
     const branchDescription =
       stage === 'concept'
         ? conceptDescription
@@ -1328,16 +1502,11 @@ export class Workflows {
             '基于已确认的正式形象生成同一对象的正面、侧面、背面三视图。保持轮廓、材质、颜色、比例和装饰细节一致，三个视角并列展示，使用干净中性背景，不添加无关人物或物品。'
           : ''
     if (focusedConcept) {
-      const visualStyle = this.store.project(s.projectId).settings?.visualStyle
       requireThat(
         body.confirmedPlan === true &&
           conceptDescription.length > 0 &&
-          conceptDescription.length <= 12000 &&
-          ((visualStyle?.confirmed === true &&
-            String(visualStyle.text || '').trim().length > 0) ||
-            conceptStyle.length > 0) &&
-          conceptStyle.length <= 1200,
-        'confirmed concept plan, description and image or project visual style required',
+          conceptDescription.length <= 12000,
+        'confirmed concept plan and description required',
         422
       )
     }
@@ -1349,17 +1518,23 @@ export class Workflows {
       'reference resource not found',
       409
     )
+    requireThat(
+      referenceResources.every(hasReferenceNote),
+      'reference images need a note before use',
+      422
+    )
     const introduction =
       stage === 'threeview' ? null : this.ensureEntityIntroduction(entity)
     const briefNode = reuseBrief || (['concept', 'threeview'].includes(stage)
       ? this.store.create(s.projectId, 'resource', {
-          name: stage === 'threeview' ? '三视图设计说明' : '概念图设计说明',
+          name: stage === 'threeview' ? '三视图设计说明' : `概念图 ${conceptId} · 设计说明`,
           entityId: entity.id,
+          ...(stage === 'concept' ? { conceptId } : {}),
           role: stage === 'threeview' ? 'threeview_brief' : 'concept_brief',
           type: 'text',
           text: branchDescription,
           description: '',
-          visualStyle: conceptStyle || null,
+          visualStyle: projectStyle.text,
           parentId: entity.id,
           sourceResourceIds: [
             ...(introduction ? [introduction.id] : []),
@@ -1367,7 +1542,7 @@ export class Workflows {
           ],
           status: 'available',
           workflowSessionId: s.id,
-          conceptPlanId: stage === 'concept' ? `concept-plan:${s.id}` : undefined
+          conceptPlanId: stage === 'concept' ? `concept-plan:${entity.id}:${conceptId}` : undefined
         })
       : null)
     if (briefNode) {
@@ -1382,8 +1557,9 @@ export class Workflows {
           ? '三视图提示词'
           : stage === 'appearance'
             ? '形象调整提示词'
-            : 'Qwen Image 2.1 概念图提示词',
+            : `概念图 ${conceptId} · 提示词`,
       entityId: entity.id,
+      ...(stage === 'concept' ? { conceptId } : {}),
       role:
         stage === 'threeview'
           ? 'threeview_prompt'
@@ -1401,7 +1577,7 @@ export class Workflows {
       ],
       status: reusePrompt ? 'available' : 'awaiting_input_confirmation',
       workflowSessionId: s.id,
-      conceptPlanId: stage === 'concept' ? `concept-plan:${s.id}` : undefined
+      conceptPlanId: stage === 'concept' ? `concept-plan:${entity.id}:${conceptId}` : undefined
     })
     if (introduction)
       this.relation(
@@ -1440,8 +1616,8 @@ export class Workflows {
       name:
         stage === 'concept'
           ? focusedConcept
-            ? '概念图生成'
-            : '概念图 · 待确认配置'
+            ? `概念图 ${conceptId} · 生成`
+            : `概念图 ${conceptId} · 待确认配置`
           : stage === 'appearance'
             ? '形象调整 · 待确认配置'
             : '正式形象三视图 · 待确认配置',
@@ -1450,6 +1626,7 @@ export class Workflows {
       sessionId,
       targetId: entity.id,
       stage,
+      ...(stage === 'concept' ? { conceptId } : {}),
       parentId:
         stage === 'threeview'
           ? `entity-workflow:${entity.id}:threeview`
@@ -1461,12 +1638,11 @@ export class Workflows {
       inputs,
       parameters: {
         prompt,
-        visualStyle:
-          conceptStyle ||
-          (focusedConcept
-            ? this.store.project(s.projectId).settings?.visualStyle?.text || ''
-            : ''),
+        visualStyle: projectStyle.text,
+        visualStylePresetId: projectStyle.presetId || 'custom',
+        visualStyleRevision: projectStyle.revision,
         promptResourceId: promptNode.id,
+        ...(stage === 'concept' ? { conceptId } : {}),
         promptResourceRevision: promptNode.revision,
         promptHash: hash(prompt),
         sourceResourceIds: promptNode.sourceResourceIds,
@@ -1547,6 +1723,14 @@ export class Workflows {
       409
     )
     const parameters = business.parameters
+    const currentStyle = projectVisualStyle(this.store.project(s.projectId))
+    requireThat(
+      currentStyle.confirmed &&
+        currentStyle.text === parameters.visualStyle &&
+        currentStyle.revision === parameters.visualStyleRevision,
+      'project-wide visual style changed after Run preparation; refresh its configuration',
+      409
+    )
     requireThat(
       entity.revision === parameters.expectedEntityRevision,
       'entity changed after configuration was prepared; ask Agent to refresh it',
@@ -1661,7 +1845,8 @@ export class Workflows {
             r.role === 'reference' &&
             r.status !== 'removed' &&
             r.type === 'image' &&
-            r.assetId
+            r.assetId &&
+            hasReferenceNote(r)
         )
         .map((r) => r.assetId)
     )
@@ -2063,9 +2248,10 @@ export class Workflows {
                   ? '正侧背三视图'
                   : run.stage === 'appearance'
                     ? '形象调整候选'
-                    : '概念图候选'
+                    : `概念图 ${run.conceptId || ''} 候选`
             }`,
             entityId: run.targetId,
+            ...(run.stage === 'concept' && run.conceptId ? { conceptId: run.conceptId } : {}),
             type: run.stage === 'voice' ? 'audio' : 'image',
             role:
               run.stage === 'voice'

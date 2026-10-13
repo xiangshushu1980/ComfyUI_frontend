@@ -54,6 +54,20 @@ export class Execution {
       entity.kind === 'entity' && entity.type === 'character',
       'character target required'
     )
+    const projectStyle = this.store.project(entity.projectId).settings?.visualStyle
+    const styleText =
+      typeof projectStyle === 'string'
+        ? projectStyle.trim()
+        : String(projectStyle?.text || '')
+    const styleConfirmed =
+      typeof projectStyle === 'string'
+        ? Boolean(styleText)
+        : projectStyle?.confirmed === true
+    requireThat(
+      styleConfirmed && styleText,
+      'confirm the project-wide visual style before generating',
+      422
+    )
     requireThat(
       entity.revision === body.entityRevision,
       'entity basis conflict',
@@ -61,7 +75,7 @@ export class Execution {
     )
     const input = {
       prompt: body.prompt || '',
-      style: body.style || '',
+      style: styleText,
       seed: body.seed ?? 42,
       steps: body.steps ?? 25,
       width: body.width ?? 1536,
@@ -169,6 +183,16 @@ export class Execution {
       requireThat(
         input.revision === a.inputRevision && input.inputHash === a.inputHash,
         'action input changed',
+        409
+      )
+      const currentStyle = this.store.project(input.projectId).settings?.visualStyle
+      const currentStyleText =
+        typeof currentStyle === 'string'
+          ? currentStyle.trim()
+          : String(currentStyle?.text || '')
+      requireThat(
+        currentStyleText === input.input.style,
+        'project-wide visual style changed after image preparation; rebuild the input',
         409
       )
       requireThat(

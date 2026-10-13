@@ -17,6 +17,7 @@ export function requireThat(ok, message, status = 422) {
 }
 export class Store {
   constructor(file) {
+    this.eventActor = null
     mkdirSync(dirname(file), { recursive: true })
     this.db = new DatabaseSync(file)
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -104,7 +105,12 @@ export class Store {
     return p
   }
   event(projectId, type, data) {
-    const body = { type, data, at: new Date().toISOString() }
+    const body = {
+      type,
+      data,
+      ...(this.eventActor ? { actor: this.eventActor } : {}),
+      at: new Date().toISOString()
+    }
     const r = this.db
       .prepare('INSERT INTO events(project_id,body) VALUES(?,?)')
       .run(projectId, JSON.stringify(body))
@@ -199,6 +205,14 @@ export class Store {
       )
       .all(id, after)
       .map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }))
+  }
+  eventCursor(id) {
+    this.project(id)
+    return Number(
+      this.db
+        .prepare('SELECT COALESCE(MAX(seq),0) n FROM events WHERE project_id=?')
+        .get(id).n
+    )
   }
   compatGet(key, fallback) {
     const r = this.db.prepare('SELECT body FROM compat WHERE key=?').get(key)

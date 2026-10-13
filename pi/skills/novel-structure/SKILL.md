@@ -9,7 +9,7 @@ Owner: Sean. Project-level Workflow skill.
 
 ## Startup
 
-1. Read the Workflow context. Identify the source novel, source revision, current chapter count and any selected source/chapter context. Report these before proposing changes.
+1. Use the compact Workflow frame to identify the selected source/chapter. Call `entity_studio` with `tool: "context"`, `scope: "target"`, and only the needed fields (`name`, `type`, `sourceId`, `sourceRevision`, `order`, `status`) to retrieve the source and its current chapter list. Follow `nextOffset` when present. Report the source revision, chapter count and selected context before proposing changes; do not request the full source text for this inventory.
 2. If the source has not been structured and the user started this Workflow on that source, call `workflow_operation` with `structure_novel` to create chapters from the existing source. Report the resulting chapter names and Run status. Do not rewrite or summarize the novel as part of structural parsing.
 3. If chapters already exist, summarize the current structure and ask what boundary/title issue the user wants to refine. Do not re-run structure or alter chapter boundaries without a concrete request.
 

@@ -302,7 +302,7 @@ export const zUsageSummary = z.object({
  * Present, with empty groups, buckets and breakdown, when the requested grouping is not served for this workspace. Render as unavailable, not as zero spend.
  */
 export const zUsageNotAvailable = z.object({
-  reason: z.enum(['no_attribution_source'])
+  reason: z.enum(['no_attribution_source', 'filter_needs_ledger'])
 })
 
 export const zUsageGroupLabel = z.object({
@@ -2980,12 +2980,24 @@ export const zBillingCapabilityRolloutDefaults = z.object({
  * names the policy branch that decided, not customer-facing wording: the
  * client owns the message.
  *
+ * How to read this: render each capability from `capabilities` as received, and
+ * use a reason only to explain a capability that is false. Never recombine
+ * capabilities or reasons into a new decision, and never derive a reason from
+ * tier, role, status or plan slug. A missing reason is not a grant. A refused
+ * capability usually has a key here naming the branch that refused it. A false
+ * capability with no matching key is an unexplained refusal: no recognised
+ * explanation, still false. A true capability never has a key.
+ * Within a key the values are listed in the order the resolver reaches them,
+ * and the first one reached is the one reported. Capabilities are UI guidance,
+ * not authorization: the write endpoints decide.
+ *
  * The invariant runs one way only. **Presence implies refusal**: a key is
  * present only alongside `capabilities.<key> == false`, reconciled before
  * the response is built, so a reason never accompanies a granted
- * capability. **Absence implies nothing** -- it means no recognised
- * explanation, not that the capability was granted. Consult
- * `capabilities`, which stays authoritative for what the client may offer.
+ * capability. **Absence implies nothing**: on a false capability it
+ * means no recognised explanation, and on a true capability it is the
+ * expected state. Consult `capabilities`, which stays authoritative for what
+ * the client may offer.
  *
  * A key is absent for a refused capability whenever this service is
  * talking to a billing-api that predates the field, and whenever it drops
@@ -2999,14 +3011,74 @@ export const zBillingCapabilityRolloutDefaults = z.object({
  *
  */
 export const zBillingCapabilityDenials = z.object({
+  can_cancel: z
+    .enum([
+      'not_a_member',
+      'not_workspace_owner',
+      'free_plan',
+      'no_subscription',
+      'tier_not_self_serve',
+      'billing_operation_in_progress',
+      'billing_operation_parked',
+      'cancellation_scheduled',
+      'subscription_ended',
+      'subscription_not_started',
+      'subscription_status_unrecognized'
+    ])
+    .optional(),
+  can_delete_workspace: z
+    .enum([
+      'not_a_member',
+      'not_workspace_owner',
+      'workspace_sso_attached',
+      'personal_workspace',
+      'billing_operation_in_progress',
+      'billing_operation_parked',
+      'plan_not_ended'
+    ])
+    .optional(),
+  can_leave_workspace: z
+    .enum([
+      'not_a_member',
+      'membership_managed_by_directory',
+      'personal_workspace_creator',
+      'only_owner'
+    ])
+    .optional(),
+  can_reactivate: z
+    .enum([
+      'not_a_member',
+      'not_workspace_owner',
+      'no_subscription',
+      'tier_not_self_serve',
+      'billing_operation_in_progress',
+      'billing_operation_parked',
+      'cancellation_not_scheduled',
+      'subscription_ended',
+      'subscription_not_started',
+      'subscription_status_unrecognized'
+    ])
+    .optional(),
   can_subscribe_self_serve: z
     .enum([
       'not_a_member',
       'not_workspace_owner',
+      'creator_only_provisioning',
       'tier_not_self_serve',
-      'subscription_not_started',
       'subscription_change_in_progress',
+      'subscription_not_started',
       'subscription_status_unrecognized'
+    ])
+    .optional(),
+  can_top_up: z
+    .enum([
+      'not_a_member',
+      'not_workspace_owner',
+      'creator_only_provisioning',
+      'payment_past_due',
+      'free_plan',
+      'no_subscription',
+      'subscription_ended'
     ])
     .optional()
 })
@@ -3015,17 +3087,33 @@ export const zBillingCapabilityDenials = z.object({
  * Conservative UI guidance. These values do not authorize billing writes;
  * each write endpoint independently enforces its permission policy.
  *
+ * Each field answers one UI question for the authenticated user in the
+ * authenticated workspace. Render each as received and never combine fields
+ * into a new decision. False without a matching key in denied_reasons means no
+ * recognised explanation, not necessarily a refusal. A field is never
+ * per-surface: one value serves every screen.
+ *
+ * When the deployment has billing disabled, this endpoint answers without
+ * consulting billing-api: can_top_up is true, can_manage_members and
+ * can_invite_members follow the owner role, and every other field is false.
+ *
  */
 export const zBillingCapabilities = z.object({
   can_cancel: z.boolean(),
   can_change_seats: z.boolean(),
+  can_delete_workspace: z.boolean(),
   can_downgrade_to_personal: z.boolean(),
   can_invite_members: z.boolean(),
+  can_leave_workspace: z.boolean(),
+  can_manage_billing: z.boolean(),
   can_manage_members: z.boolean(),
+  can_manage_partner_node_access: z.boolean(),
   can_reactivate: z.boolean(),
   can_revert_scheduled_change: z.boolean(),
   can_subscribe_self_serve: z.boolean(),
-  can_top_up: z.boolean()
+  can_top_up: z.boolean(),
+  can_view_pending_invites: z.boolean(),
+  can_view_team_usage: z.boolean()
 })
 
 /**
@@ -3035,6 +3123,8 @@ export const zBillingCapabilitiesResponse = z.object({
   capabilities: zBillingCapabilities,
   denied_reasons: zBillingCapabilityDenials.optional(),
   expires_at: z.string().datetime(),
+  plan_kind: z.enum(['none', 'self_serve', 'sales_managed']).optional(),
+  recovery_route: z.enum(['none', 'resubscribe', 'contact_sales']).optional(),
   resolved_for: zBillingCapabilityScope,
   revision: z.coerce
     .bigint()
@@ -4303,6 +4393,10 @@ export const zGetBillingUsageTimeSeriesQuery = z.object({
     .enum(['model', 'endpoint', 'product', 'product_line', 'person', 'source'])
     .optional()
     .default('model'),
+  filter_product_line: z.string().max(200).optional(),
+  filter_model: z.string().max(200).optional(),
+  filter_person: z.string().max(200).optional(),
+  filter_source: z.string().max(200).optional(),
   granularity: z.enum(['hour', 'day', 'month']).optional().default('month'),
   starting_on: z.string().datetime().optional(),
   ending_before: z.string().datetime().optional(),

@@ -61,7 +61,7 @@ export type WorkspaceDeploymentList = {
    */
   gone_default_deployment_id?: string
   /**
-   * The deployment this browser had picked, present only when it is no longer one of the workspace's live deployments (deleted, or no longer the workspace's). Every catalog read and submit already ran this browser on Comfy Cloud for it, and this response clears the pick: the pick cookie is rewritten as the explicit Comfy Cloud pick (pick_source `browser`), whether or not the workspace has a live default, so a default an owner sets later does not move this browser. The browser is on Comfy Cloud and picked_deployment_id is absent. The next listing no longer carries it, so the editor tells the person on this response.
+   * The deployment this browser had picked, present only when it is no longer one of the workspace's live deployments (deleted, or no longer the workspace's). Every catalog read and submit already ran this browser on Comfy Cloud for it. The response leaves the cookie untouched, so an older listing cannot overwrite a newer pick. The stale cookie remains an explicit browser pick (pick_source `browser`), so a workspace default set later does not move this browser. The browser is on Comfy Cloud and picked_deployment_id is absent. Subsequent listings report the same gone id until the cookie changes or expires.
    */
   gone_picked_deployment_id?: string
   items: Array<WorkspaceDeployment>
@@ -536,12 +536,12 @@ export type UsageSummary = {
  * Present, with empty groups, buckets and breakdown, when the requested grouping is not served for this workspace. Render as unavailable, not as zero spend.
  */
 export type UsageNotAvailable = {
-  reason: 'no_attribution_source'
+  reason: 'no_attribution_source' | 'filter_needs_ledger'
 }
 
 export type UsageGroupLabel = {
   /**
-   * Human-readable name for the key: a person's name, a product line's label, or the key's owner and prefix.
+   * Human-readable name for the key: a person's name, a product line's label, a model's name (`Not specified` for `unspecified`), or the key's owner and prefix.
    */
   display_name?: string
   /**
@@ -3259,8 +3259,7 @@ export type InputUploadUrlRequest = {
    * MIME type of the file to upload. Must be one of the image types
    * image/jpeg, image/png, image/webp, image/gif, the audio types
    * audio/mpeg, audio/mp3, audio/wav, audio/wave, audio/x-wav,
-   * audio/flac, audio/x-flac, audio/ogg, or — where the deployment has
-   * enabled video input uploads — the video types video/mp4,
+   * audio/flac, audio/x-flac, audio/ogg, or the video types video/mp4,
    * video/webm, video/quicktime.
    * Advisory: the stored asset's format always follows the uploaded
    * bytes as identified server-side (decoded for images, sniffed for
@@ -4976,12 +4975,24 @@ export type BillingCapabilityRolloutDefaults = {
  * names the policy branch that decided, not customer-facing wording: the
  * client owns the message.
  *
+ * How to read this: render each capability from `capabilities` as received, and
+ * use a reason only to explain a capability that is false. Never recombine
+ * capabilities or reasons into a new decision, and never derive a reason from
+ * tier, role, status or plan slug. A missing reason is not a grant. A refused
+ * capability usually has a key here naming the branch that refused it. A false
+ * capability with no matching key is an unexplained refusal: no recognised
+ * explanation, still false. A true capability never has a key.
+ * Within a key the values are listed in the order the resolver reaches them,
+ * and the first one reached is the one reported. Capabilities are UI guidance,
+ * not authorization: the write endpoints decide.
+ *
  * The invariant runs one way only. **Presence implies refusal**: a key is
  * present only alongside `capabilities.<key> == false`, reconciled before
  * the response is built, so a reason never accompanies a granted
- * capability. **Absence implies nothing** -- it means no recognised
- * explanation, not that the capability was granted. Consult
- * `capabilities`, which stays authoritative for what the client may offer.
+ * capability. **Absence implies nothing**: on a false capability it
+ * means no recognised explanation, and on a true capability it is the
+ * expected state. Consult `capabilities`, which stays authoritative for what
+ * the client may offer.
  *
  * A key is absent for a refused capability whenever this service is
  * talking to a billing-api that predates the field, and whenever it drops
@@ -4996,22 +5007,271 @@ export type BillingCapabilityRolloutDefaults = {
  */
 export type BillingCapabilityDenials = {
   /**
-   * not_a_member is unreachable through this endpoint -- a non-member is
-   * answered 403 before capabilities resolve. subscription_not_started
-   * is a subscription row reserved before payment that never began.
-   * subscription_change_in_progress means the current subscription
-   * already has a successor scheduled for a future billing boundary.
-   * subscription_status_unrecognized is the server having no guidance
-   * for the row, as distinct from a deliberate refusal.
+   * Present only when can_cancel is false. The value names the resolver branch
+   * that decided, not customer wording. Values are listed in the order the
+   * resolver reaches them; the first one reached wins. cancellation_scheduled,
+   * subscription_ended, subscription_not_started and
+   * subscription_status_unrecognized belong to different subscription statuses and
+   * are alternatives that never compete. Absent while the capability is false
+   * means no recognised explanation, not a grant.
+   * - not_a_member: the caller is not a member of the workspace. Unreachable
+   * over HTTP: a non-member is answered 403 before capabilities resolve.
+   * - not_workspace_owner: the caller is a member whose role is not owner. Not
+   * the same as not_a_member.
+   * - free_plan: the current tier is FREE. Checked on the tier alone, whatever
+   * the status, and before the no-subscription check. A FREE plan is not a paid
+   * subscription, so there is nothing to cancel.
+   * - no_subscription: there is no subscription row and the server treats that
+   * absence as authoritative. Where the absence is only unknown (a legacy
+   * Stripe workspace) can_cancel stays true and no reason is sent. A leftover
+   * reserved row with no live operation behind it, on a self-serve tier, is
+   * reported as no subscription.
+   * - tier_not_self_serve: the subscription's tier is sales-managed or
+   * unrecognised, so its lifecycle is not customer-driven.
+   * - billing_operation_in_progress: an initial subscription, plan change,
+   * cancel, resubscribe, seat change, revert or retention offer is running,
+   * either a pending workflow or the retention-offer gate between the Stripe
+   * write and its confirmation. It settles on its own, so a client may tell the
+   * user to wait, and cancel is refused until it does. Not
+   * subscription_change_in_progress, where a successor plan is scheduled. Not
+   * evaluated for a reserved subscription, which reports
+   * subscription_not_started. Reached before cancellation_scheduled.
+   * - billing_operation_parked: such an operation is parked for reconciliation,
+   * either paid but credits not granted or a replacement subscription that
+   * could not finish superseding the old one. It does not clear on its own, so
+   * a client must route the user to support and never imply a wait. Reported
+   * instead of billing_operation_in_progress when both kinds exist, and reached
+   * at the same point, before cancellation_scheduled.
+   * - cancellation_scheduled: a cancellation is already scheduled, so cancelling
+   * again is refused. The opposite of cancellation_not_scheduled on
+   * can_reactivate.
+   * - subscription_ended: the subscription has stopped for good: ended, or
+   * canceled with no cancellation date. Never competes with
+   * billing_operation_in_progress or billing_operation_parked, which a stopped
+   * subscription does not evaluate.
+   * - subscription_not_started: a subscription row is reserved but not running.
+   * Not no_subscription (no row at all) and not subscription_ended.
+   * - subscription_status_unrecognized: the subscription status is one the
+   * resolver has no guidance for. The server is undetermined, which is not a
+   * deliberate refusal.
+   *
+   */
+  can_cancel?:
+    | 'not_a_member'
+    | 'not_workspace_owner'
+    | 'free_plan'
+    | 'no_subscription'
+    | 'tier_not_self_serve'
+    | 'billing_operation_in_progress'
+    | 'billing_operation_parked'
+    | 'cancellation_scheduled'
+    | 'subscription_ended'
+    | 'subscription_not_started'
+    | 'subscription_status_unrecognized'
+  /**
+   * Present only when can_delete_workspace is false. The value names the
+   * resolver branch that decided, not customer wording. The list follows the
+   * order the resolver reaches the branches, and the first one reached wins.
+   * Absent while the capability is false means no recognised explanation, not
+   * a grant: a fact could not be read, or the team-workspaces feature is off.
+   * - not_a_member: the caller is not a member of the workspace. Unreachable
+   * through this endpoint: a non-member is answered 403 before capabilities
+   * resolve.
+   * - not_workspace_owner: the caller is a member whose role is not owner. A
+   * non-owner is told nothing below this branch, so it never learns whether
+   * an SSO organization holds the workspace.
+   * - workspace_sso_attached: the workspace belongs to an SSO organization and
+   * only an operator detach can delete it.
+   * - personal_workspace: a personal workspace, which is never deleted.
+   * - billing_operation_in_progress: an initial subscription, plan change,
+   * cancel, resubscribe, seat change, revert or retention offer is running,
+   * either a pending workflow or the retention-offer gate between the
+   * Stripe write and its confirmation. It settles on its own, so a client
+   * may tell the user to wait. The same fact as the reason of that name on
+   * can_cancel and can_reactivate. Not plan_not_ended, which is about a
+   * subscription row.
+   * - billing_operation_parked: such an operation is parked for
+   * reconciliation, either paid but credits not granted or a replacement
+   * subscription that could not finish superseding the old one. It does
+   * not clear on its own, so a client must route the user to support and
+   * never imply a wait. Reported instead of billing_operation_in_progress
+   * when both kinds exist. The same fact as the reason of that name on
+   * can_cancel and can_reactivate.
+   * - plan_not_ended: a subscription row is still live, so deleting the
+   * workspace would leave the plan charging. Live means active, or canceled
+   * with no cancellation date or one still in the future; ended and reserved
+   * rows do not count. Reached after billing_operation_in_progress and
+   * billing_operation_parked.
+   *
+   */
+  can_delete_workspace?:
+    | 'not_a_member'
+    | 'not_workspace_owner'
+    | 'workspace_sso_attached'
+    | 'personal_workspace'
+    | 'billing_operation_in_progress'
+    | 'billing_operation_parked'
+    | 'plan_not_ended'
+  /**
+   * Present only when can_leave_workspace is false. The value names the
+   * resolver branch that decided, not customer wording. The list follows the
+   * order the resolver reaches the branches, and the first one reached wins.
+   * Absent while the capability is false means no recognised explanation, not
+   * a grant: a fact could not be read, or the team-workspaces feature is off.
+   * - not_a_member: the caller is not a member of the workspace. Unreachable
+   * through this endpoint: a non-member is answered 403 before capabilities
+   * resolve.
+   * - membership_managed_by_directory: the workspace's SSO organization is
+   * attached and holds this account, so the membership is the organization's
+   * to manage and leaving would strand an SSO account with no workspace.
+   * - personal_workspace_creator: the caller created this personal workspace
+   * and can never leave it. Not personal_workspace on can_delete_workspace,
+   * which is about deleting the workspace.
+   * - only_owner: the caller is the sole owner, so leaving would leave the
+   * workspace with no owner. Another owner must exist first.
+   *
+   */
+  can_leave_workspace?:
+    | 'not_a_member'
+    | 'membership_managed_by_directory'
+    | 'personal_workspace_creator'
+    | 'only_owner'
+  /**
+   * Present only when can_reactivate is false. The value names the resolver
+   * branch that decided, not customer wording. Values are listed in the order the
+   * resolver reaches them; the first one reached wins. cancellation_not_scheduled,
+   * subscription_ended, subscription_not_started and
+   * subscription_status_unrecognized belong to different subscription statuses and
+   * are alternatives that never compete. Absent while the capability is false
+   * means no recognised explanation, not a grant.
+   * - not_a_member: the caller is not a member of the workspace. Unreachable
+   * over HTTP: a non-member is answered 403 before capabilities resolve.
+   * - not_workspace_owner: the caller is a member whose role is not owner. Not
+   * the same as not_a_member.
+   * - no_subscription: there is no subscription row, so there is nothing to
+   * reactivate. Unlike can_cancel, reported even where the absence is only
+   * unknown, because reactivation needs a subscription id that does not exist
+   * without a row.
+   * - tier_not_self_serve: the subscription's tier is sales-managed or
+   * unrecognised, so its lifecycle is not customer-driven.
+   * - billing_operation_in_progress: an initial subscription, plan change,
+   * cancel, resubscribe, seat change, revert or retention offer is running,
+   * either a pending workflow or the retention-offer gate between the Stripe
+   * write and its confirmation. It settles on its own, so a client may tell the
+   * user to wait, and reactivate is refused until it does. Not
+   * subscription_change_in_progress, where a successor plan is scheduled. Not
+   * evaluated for a reserved subscription, which reports
+   * subscription_not_started. Reached before cancellation_not_scheduled.
+   * - billing_operation_parked: such an operation is parked for reconciliation,
+   * either paid but credits not granted or a replacement subscription that
+   * could not finish superseding the old one. It does not clear on its own, so
+   * a client must route the user to support and never imply a wait. Reported
+   * instead of billing_operation_in_progress when both kinds exist, and reached
+   * at the same point, before cancellation_not_scheduled.
+   * - cancellation_not_scheduled: the subscription is running with no
+   * cancellation scheduled, so there is nothing to undo. The opposite of
+   * cancellation_scheduled on can_cancel. A FREE plan reports this too, since
+   * free_plan is a reason for can_cancel only.
+   * - subscription_ended: the subscription has stopped for good: ended, or
+   * canceled with no cancellation date. A plan that has ended is not recovered
+   * by reactivating; can_subscribe_self_serve is the way back.
+   * - subscription_not_started: a subscription row is reserved but not running.
+   * Not no_subscription (no row at all) and not subscription_ended.
+   * - subscription_status_unrecognized: the subscription status is one the
+   * resolver has no guidance for. The server is undetermined, which is not a
+   * deliberate refusal.
+   *
+   */
+  can_reactivate?:
+    | 'not_a_member'
+    | 'not_workspace_owner'
+    | 'no_subscription'
+    | 'tier_not_self_serve'
+    | 'billing_operation_in_progress'
+    | 'billing_operation_parked'
+    | 'cancellation_not_scheduled'
+    | 'subscription_ended'
+    | 'subscription_not_started'
+    | 'subscription_status_unrecognized'
+  /**
+   * Present only when can_subscribe_self_serve is false. The value names the
+   * resolver branch that decided, not customer wording. Values are listed in the
+   * order the resolver reaches them; the first one reached wins.
+   * subscription_not_started and subscription_status_unrecognized are
+   * alternatives for different subscription statuses and never compete. Absent
+   * while the capability is false means no recognised explanation, not a grant.
+   * - not_a_member: the caller is not a member of the workspace. Unreachable
+   * over HTTP: a non-member is answered 403 before capabilities resolve.
+   * - not_workspace_owner: the caller is a member whose role is not owner. Not
+   * the same as not_a_member.
+   * - creator_only_provisioning: the caller is an owner but not the creator of a
+   * personal workspace whose billing identity (Stripe customer, Metronome
+   * customer or Metronome contract) is not provisioned yet. Subscribing
+   * provisions it first, and only the creator may. The same reason appears on
+   * can_top_up.
+   * - tier_not_self_serve: the subscription's tier is sales-managed or
+   * unrecognised, so its lifecycle is not customer-driven.
+   * - subscription_change_in_progress: the current subscription already has a
+   * successor plan scheduled for a future billing boundary. Reached before
+   * subscription_not_started and subscription_status_unrecognized. Not
+   * billing_operation_in_progress, which names an operation that is running or
+   * parked and is a reason for can_cancel and can_reactivate only.
+   * - subscription_not_started: a subscription row is reserved but not running
+   * and no live checkout can safely be resumed for it. Not no_subscription (no
+   * row at all) and not subscription_ended (a plan that ran and stopped).
+   * - subscription_status_unrecognized: the subscription status is one the
+   * resolver has no guidance for. The server is undetermined, which is not a
+   * deliberate refusal.
    *
    */
   can_subscribe_self_serve?:
     | 'not_a_member'
     | 'not_workspace_owner'
+    | 'creator_only_provisioning'
     | 'tier_not_self_serve'
-    | 'subscription_not_started'
     | 'subscription_change_in_progress'
+    | 'subscription_not_started'
     | 'subscription_status_unrecognized'
+  /**
+   * Present only when can_top_up is false. The value names the resolver branch that
+   * decided, not customer wording. Values are listed in the order the resolver
+   * reaches them; the first one reached wins. Absent while the capability is
+   * false means no recognised explanation, not a grant. A running sales-managed
+   * plan keeps top-up open and carries no reason.
+   * - not_a_member: the caller is not a member of the workspace. Unreachable
+   * over HTTP: a non-member is answered 403 before capabilities resolve.
+   * - not_workspace_owner: the caller is a member whose role is not owner. Not
+   * the same as not_a_member.
+   * - creator_only_provisioning: the caller is an owner but not the creator of a
+   * personal workspace whose billing identity (Stripe customer, Metronome
+   * customer or Metronome contract) is not provisioned yet. A top-up provisions
+   * it first, and only the creator may. The same reason appears on
+   * can_subscribe_self_serve; can_manage_billing is false there too, without a
+   * reason. Reached before payment_past_due.
+   * - payment_past_due: the workspace billing status is payment_failed or paused.
+   * Credits bought now could not be spent until the failed subscription payment
+   * is resolved, so the customer resolves it first. Reported before free_plan and
+   * no_subscription, so a past-due workspace is told about the payment first.
+   * - free_plan: the current tier is FREE, checked on the tier alone. A FREE plan
+   * is not a paid subscription; subscribe first. The same state as
+   * no_subscription for top-up purposes.
+   * - no_subscription: there is no subscription row and the server treats that
+   * absence as authoritative. Where the absence is only unknown (a legacy
+   * Stripe workspace) can_top_up stays true and no reason is sent.
+   * - subscription_ended: the subscription has stopped for good: ended, or
+   * canceled with no cancellation date. Applies to a self-serve plan and to a
+   * sales-managed plan whose term has ended; a running sales-managed plan is not
+   * refused.
+   *
+   */
+  can_top_up?:
+    | 'not_a_member'
+    | 'not_workspace_owner'
+    | 'creator_only_provisioning'
+    | 'payment_past_due'
+    | 'free_plan'
+    | 'no_subscription'
+    | 'subscription_ended'
 }
 
 /**
@@ -5024,6 +5284,40 @@ export type BillingCapabilitiesResponse = {
    * Time after which the client must refetch this snapshot.
    */
   expires_at: string
+  /**
+   * Who runs the plan lifecycle. Rendered as received; never derive it from
+   * tier names or slugs.
+   * - none: the workspace has no subscription in the capability facts. An
+   * orphaned reserved row on a self-serve tier is reported as none.
+   * - self_serve: a subscription on a tier with a customer-driven lifecycle,
+   * including a FREE plan.
+   * - sales_managed: a subscription on a sales-managed tier. It also covers a
+   * tier the resolver does not recognise.
+   * It classifies the plan by tier only. It says nothing about whether the plan
+   * is running (a reserved or ended subscription still has a kind) and nothing
+   * about what the user may do; that is capabilities. Absent in the same cases as
+   * recovery_route.
+   *
+   */
+  plan_kind?: 'none' | 'self_serve' | 'sales_managed'
+  /**
+   * Where the customer goes when the plan has ended. Rendered as received;
+   * never derive it from tier names or slugs.
+   * - none: there is no subscription, or it has not stopped for good (a
+   * canceled plan that still has a cancellation date has not).
+   * - resubscribe: the subscription has stopped for good (ended, or canceled
+   * with no cancellation date) on a self-serve tier. The route is subscribing
+   * again.
+   * - contact_sales: the subscription has stopped for good on a sales-managed
+   * or unrecognised tier. The route is through sales.
+   * It names the route only and deliberately ignores the user's role. Whether
+   * the control is enabled stays with capabilities.can_subscribe_self_serve
+   * and its denied reason. It is not a capability and not authorization.
+   * Absent when billing is disabled, when talking to a billing-api version
+   * that predates it, and when the upstream value is not recognised.
+   *
+   */
+  recovery_route?: 'none' | 'resubscribe' | 'contact_sales'
   resolved_for: BillingCapabilityScope
   /**
    * JavaScript-safe, time-sortable revision for this snapshot. It
@@ -5048,23 +5342,302 @@ export type BillingCapabilitiesResponse = {
  * Conservative UI guidance. These values do not authorize billing writes;
  * each write endpoint independently enforces its permission policy.
  *
+ * Each field answers one UI question for the authenticated user in the
+ * authenticated workspace. Render each as received and never combine fields
+ * into a new decision. False without a matching key in denied_reasons means no
+ * recognised explanation, not necessarily a refusal. A field is never
+ * per-surface: one value serves every screen.
+ *
+ * When the deployment has billing disabled, this endpoint answers without
+ * consulting billing-api: can_top_up is true, can_manage_members and
+ * can_invite_members follow the owner role, and every other field is false.
+ *
  */
 export type BillingCapabilities = {
+  /**
+   * - Answers: should the client offer cancelling the subscription?
+   * - True: the user is a workspace owner of a paid self-serve subscription that
+   * is running with no cancellation scheduled and no billing operation in
+   * flight. It is also true where there is no local subscription row but that
+   * absence is not authoritative (the state is unknown, not none).
+   * - False: denied_reasons.can_cancel names the branch that decided. False
+   * without that key means no recognised explanation, not necessarily a
+   * refusal, for example when billing-api predates the field.
+   * - Not: authorization (the cancel route enforces its own rules). Not
+   * can_reactivate, which undoes a scheduled cancellation, and not
+   * can_subscribe_self_serve. A FREE plan is not a paid subscription, so it has
+   * nothing to cancel.
+   * - False when: the user is not an owner; the tier is FREE; there is no
+   * subscription row and the absence is authoritative; the tier is
+   * sales-managed or unrecognised; the subscription is reserved but not
+   * running; its status is not recognised; it has ended or been canceled for
+   * good; a billing operation is running or parked; a cancellation is already
+   * scheduled.
+   *
+   */
   can_cancel: boolean
+  /**
+   * - Answers: should the client offer changing the seat quantity of the
+   * subscription?
+   * - True: the user is a workspace owner with a subscription row on a
+   * self-serve tier whose status is active, or canceled with a cancellation
+   * date still set.
+   * - False: never explained. There is no denied_reasons key for this field, so
+   * false without a reason is the normal case, not a gap.
+   * - Not: authorization (the seat-change route enforces its own rules). Not room
+   * to invite (can_invite_members) and not member management
+   * (can_manage_members). The resolver tests the tier only against the
+   * self-serve list and does not check that the plan is seat-based, so true
+   * does not mean the plan has seats to change: an owner on a FREE plan gets
+   * true. A scheduled cancellation, a scheduled successor plan, a running
+   * billing operation and a past-due payment do not change it.
+   * - False when: the user is not an owner; there is no subscription row, even
+   * where that absence is only unknown; the tier is sales-managed or
+   * unrecognised; the subscription is reserved but not running; its status is
+   * not recognised; it has ended or been canceled for good.
+   *
+   */
   can_change_seats: boolean
+  /**
+   * - Answers: should the client offer deleting this workspace?
+   * - True: the user is an owner of a team workspace and, when the answer was
+   * read, the workspace is not attached to an SSO organization, has no
+   * subscription-changing billing operation running or parked, and has no
+   * live subscription.
+   * - False: denied_reasons.can_delete_workspace names the branch that
+   * decided. False without that key means no recognised explanation, not a
+   * refusal: a fact it depends on could not be read, or the team-workspaces
+   * feature is off.
+   * - Not: authorization. It reports what the DELETE /api/workspaces/{id}
+   * handler would decide; the handler stays authoritative and re-checks under
+   * the workspace lock, so this answer can be stale. Not a billing
+   * capability: use can_cancel to ask about cancelling a subscription.
+   * - False when: the user is not an owner; the workspace is personal; the
+   * workspace is attached to an SSO organization; a billing operation is
+   * running or parked; a subscription is still live; a dependent fact could
+   * not be read; the team-workspaces feature is off.
+   *
+   */
+  can_delete_workspace: boolean
+  /**
+   * - Answers: may the user downgrade the workspace's subscription to a personal
+   * plan?
+   * - True: not in practice today. billing-api forces this field to false in
+   * every response, a retired rollout's closed default, so a client must not
+   * wait for it to become true.
+   * - False: always on this server version. There is no denied_reasons key for
+   * this field.
+   * - Not: authorization. Not the same as
+   * rollout_defaults_applied.can_downgrade_to_personal, which is true by design
+   * and says nothing about this value.
+   * - Before that override the resolver would grant it only to the workspace's
+   * original owner (its creator) who also has the owner role, on a running
+   * self-serve subscription with no successor plan scheduled.
+   *
+   */
   can_downgrade_to_personal: boolean
+  /**
+   * - Answers: should the client offer sending a new workspace invitation right
+   * now?
+   * - True: the user is a workspace owner and the workspace has room: members
+   * plus unexpired pending invitations are below the seat limit, or the limit
+   * is not positive (unlimited).
+   * - False: never explained. There is no denied_reasons key for this field.
+   * - Not: authorization (invitation creation enforces the same limit itself).
+   * Not member management (can_manage_members) and not buying seats
+   * (can_change_seats). Pending invitations count toward capacity. The
+   * resolver ignores tier, subscription status, cancellation and past-due
+   * payment; only the seat limit, which can come from the active plan, reflects
+   * the plan.
+   * - False when: the user is not an owner; the seat limit is 1 (the limit is the
+   * workspace override if set, else the active plan's default max seats, and
+   * defaults to one seat with no active subscription); members plus unexpired
+   * pending invitations have reached the limit; the capacity could not be
+   * read, which fails closed.
+   *
+   */
   can_invite_members: boolean
   /**
-   * Workspace owner may manage members independently of seat quantity and subscription lifecycle. Individual target restrictions still apply.
+   * - Answers: should the client offer leaving this workspace?
+   * - True: the user is a member and no branch below applies. A plain member
+   * of a team workspace can leave; an owner can leave only when another
+   * owner remains.
+   * - False: denied_reasons.can_leave_workspace names the branch that decided.
+   * False without that key means no recognised explanation, not a refusal: a
+   * fact it depends on could not be read, or the team-workspaces feature is
+   * off.
+   * - Not: authorization. It reports what POST /api/workspace/leave would
+   * decide for the authenticated workspace; the route stays authoritative.
+   * Not can_delete_workspace: leaving ends one membership, deleting removes
+   * the workspace.
+   * - False when: the user is not a member; the membership is managed by the
+   * workspace's SSO organization; the user created this personal workspace;
+   * the user is the only owner.
+   *
+   */
+  can_leave_workspace: boolean
+  /**
+   * - Answers: should the client offer payment-method, invoice, payment-update
+   * and company-details management?
+   * - True: the user is a member of the workspace whose role is owner, except in
+   * the false case below.
+   * - False: never explained. There is no denied_reasons key for this field.
+   * - Not: authorization. Not member management (can_manage_members) and not
+   * buying or subscribing (can_top_up, can_subscribe_self_serve). Independent
+   * of tier, subscription status, cancellation, past-due payment, a running
+   * billing operation and invite capacity.
+   * - False when: the user is not an owner, or is a non-creator owner of a
+   * personal workspace that is missing a billing provider id (not yet
+   * provisioned).
+   *
+   */
+  can_manage_billing: boolean
+  /**
+   * - Answers: should the client offer member-management controls?
+   * - True: the user is a member of the workspace whose role is owner.
+   * - False: never explained. There is no denied_reasons key for this field.
+   * - Not: authorization; individual target restrictions still apply. Not invite
+   * capacity (can_invite_members), seat quantity (can_change_seats) or billing
+   * management (can_manage_billing). Independent of tier, subscription status,
+   * cancellation, past-due payment and billing provisioning.
+   * - False when: the user is not a member, or is a member whose role is not
+   * owner. Nothing else closes it.
+   *
    */
   can_manage_members: boolean
+  /**
+   * - Answers: should the client offer changing the workspace's partner node
+   * (partner provider) access policy?
+   * - True: the user is an owner and the workspace holds the partner
+   * governance entitlement.
+   * - False: never explained. There is no denied_reasons key for this field.
+   * False covers a missing entitlement, an entitlement that could not be
+   * read, a non-owner and the team-workspaces feature being off.
+   * - Not: authorization. It mirrors the owner-only PUT
+   * /api/workspace/provider-policy, which replaces the whole policy document
+   * and stays authoritative. Not whether the policy may be read: GET
+   * /api/workspace/provider-policy is available to members and answers 403
+   * FEATURE_NOT_ENABLED without the entitlement. Not can_manage_members.
+   * - False when: the user is not an owner; the workspace lacks the partner
+   * governance entitlement; the entitlement could not be read; the
+   * team-workspaces feature is off.
+   *
+   */
+  can_manage_partner_node_access: boolean
+  /**
+   * - Answers: may the user undo a SCHEDULED cancellation on a subscription that
+   * is still running?
+   * - True: the user is a workspace owner, the subscription is active or canceled
+   * with a cancellation date still set (running until that date), and no
+   * billing operation is in flight.
+   * - False: denied_reasons.can_reactivate names the branch that decided. False
+   * without that key means no recognised explanation, not necessarily a
+   * refusal, for example when billing-api predates the field.
+   * - Not: authorization (the resubscribe route enforces its own rules). Not a
+   * way back from a plan that has ended: that is can_subscribe_self_serve,
+   * which stays open there. Not an undo of a scheduled plan change, which is
+   * can_revert_scheduled_change.
+   * - False when: the user is not an owner; there is no subscription row at all,
+   * even where that absence is only unknown; the tier is sales-managed or
+   * unrecognised; the subscription is reserved but not running; its status is
+   * not recognised; it has ended or been canceled for good; a billing
+   * operation is running or parked; no cancellation is scheduled.
+   *
+   */
   can_reactivate: boolean
   /**
-   * Stripe-billed only; false within 1 hour of the change.
+   * - Answers: may the user undo a plan change that is already scheduled for a
+   * future billing boundary?
+   * - True: the user is a workspace owner, the subscription is Stripe-billed and
+   * has a pending scheduled change from it, and the revert window is open: more
+   * than one hour before the change takes effect and, when reverting would
+   * restore a cancellation, more than one hour before that cancellation date.
+   * - False: never explained. There is no denied_reasons key for this field, so
+   * it does not say which of the conditions failed.
+   * - Not: authorization. Not can_reactivate (undo a scheduled cancellation) and
+   * not can_subscribe_self_serve. When subscribe is refused with
+   * subscription_change_in_progress, a successor plan is scheduled; this field
+   * says whether that change can still be reverted.
+   * - False when: the user is not an owner; there is no pending scheduled change
+   * from this subscription; the cutoff has passed; the tier is sales-managed or
+   * unrecognised; the subscription has ended or been canceled for good.
+   *
    */
   can_revert_scheduled_change: boolean
+  /**
+   * - Answers: may this user start, recover or change a self-serve plan?
+   * - True: the user is a workspace owner (any member whose role is owner, not
+   * only the creator) and no resolver branch closed it. That includes a
+   * workspace with no plan, a running self-serve plan, and a plan that has ended
+   * or been canceled for good, where it stays open because it is the only path
+   * back.
+   * - False: the user is not an owner, the user is a non-creator owner of a
+   * personal workspace whose billing is not yet provisioned, the tier is
+   * sales-managed or unrecognised, a successor plan is already scheduled, the
+   * subscription is reserved but not running and has no recoverable checkout,
+   * or its status is not recognised. denied_reasons.can_subscribe_self_serve
+   * names the branch that decided. False without that key means no recognised
+   * explanation, not necessarily a refusal, for example when billing-api
+   * predates the field.
+   * - Not: authorization (the subscribe route enforces its own rules). Not
+   * can_top_up (buy credits), can_reactivate (undo a scheduled cancellation) or
+   * can_cancel. One value serves every surface; there is no per-surface
+   * variant.
+   *
+   */
   can_subscribe_self_serve: boolean
+  /**
+   * - Answers: should the client offer buying credits?
+   * - True: the user is a workspace owner and none of the false conditions below
+   * applies. A sales-managed tier stays true while its subscription is not
+   * terminal, because the contract, not the subscription row, entitles the
+   * customer to buy credits.
+   * - False: denied_reasons.can_top_up names the branch that decided. False
+   * without that key means no recognised explanation, not necessarily a
+   * refusal, for example when billing-api predates the field.
+   * - Not: authorization (the top-up route enforces its own rules). Not
+   * can_subscribe_self_serve, which starts or recovers a plan. Cloud policy is
+   * that credits are not for sale with no plan, a FREE plan, an ended plan or a
+   * past-due payment.
+   * - False when: the user is not an owner; the user is a non-creator owner of a
+   * personal workspace whose billing is not yet provisioned; the tier is FREE,
+   * or there is no subscription and the absence is authoritative (where the
+   * absence is only unknown the field stays true); the workspace billing status
+   * is payment_failed or paused (past due); the subscription has ended or been
+   * canceled for good, on a self-serve or a sales-managed tier.
+   *
+   */
   can_top_up: boolean
+  /**
+   * - Answers: should the client show the workspace's invitation list?
+   * - True: the user is a member of the workspace whose role is owner.
+   * - False: never explained. There is no denied_reasons key for this field.
+   * False means the user is not an owner, the team-workspaces feature is off,
+   * or the membership could not be read.
+   * - Not: authorization. It mirrors the owner-only GET /api/workspace/invites
+   * route, which stays authoritative and lists every invitation including
+   * expired ones, despite the word pending. Not room to send a new invitation
+   * (can_invite_members) and not member management (can_manage_members).
+   * - False when: the user is not an owner; the team-workspaces feature is
+   * off; the membership could not be read.
+   *
+   */
+  can_view_pending_invites: boolean
+  /**
+   * - Answers: may the user see the whole-workspace usage attribution
+   * breakdown rather than only their own rows?
+   * - True: the user is an owner and the usage-attribution feature is enabled.
+   * - False: never explained. There is no denied_reasons key for this field.
+   * - Not: whether the usage route is reachable. GET
+   * /api/billing/usage/timeseries answers any authenticated workspace member,
+   * and with attribution enabled a non-owner's attribution groupings are
+   * limited to their own rows. Not authorization, and not a billing
+   * capability.
+   * - False when: the user is not an owner; usage attribution is not enabled;
+   * the team-workspaces feature is off; the membership could not be read.
+   *
+   */
+  can_view_team_usage: boolean
 }
 
 /**
@@ -5688,7 +6261,7 @@ export type AgentPendingAsk =
  */
 export type AgentMessage = {
   /**
-   * Message payload. User turns carry {text, attachments?, attachment_refs?, workflow_references?}. Attachments are the input-image filenames from the request. attachment_refs is the server's own resolution of those same filenames to library assets, as {name, id?, kind?, display_name?} objects. display_name preserves the original user-facing filename when name is an opaque storage key. To bound denormalized data, repeated entries with the same name carry display_name only on the first occurrence; clients should apply it to every entry sharing that name. The sibling exists so a later turn in the thread can reach an earlier turn's file — clients should keep reading attachments. workflow_references is an optional array of explicit non-target references, each with workflow_id and name (an empty string when no name was supplied). An optional unavailable: true records that the reference could not be authorized at turn start, without distinguishing unknown IDs, inaccessible workflows, or lookup failures. These entries preserve the user's reference intent without exposing workflow content; the frontend restores reference chips from this metadata. The field is omitted when there are no references. Assistant turns carry {text} — the final answer text (or error copy on a failed turn). Omitted when empty (e.g. an assistant message still streaming). Per-turn token accounting is NOT included here; it is surfaced on the agent_message_done WebSocket broadcast. tool_calls is an optional array of ToolCallSummary, attached to an assistant message that has persisted terminal (ok/error) tool-call rows — it lets a chat reload render the tool history a turn produced instead of showing nothing until the next live turn. Omitted when the message has no such rows.
+   * Message payload. User turns carry {text, attachments?, attachment_refs?, workflow_references?}. Attachments are the input-image filenames from the request. attachment_refs is the server's own resolution of those same filenames to library assets, as {name, id?, kind?, display_name?} objects. display_name carries the validated user-facing filename when name is an opaque storage key; the server may remove a registered emoji selector that does not change the displayed glyph. To bound denormalized data, repeated entries with the same name carry display_name only on the first occurrence; clients should apply it to every entry sharing that name. The sibling exists so a later turn in the thread can reach an earlier turn's file — clients should keep reading attachments. workflow_references is an optional array of explicit non-target references, each with workflow_id and name (an empty string when no name was supplied). An optional unavailable: true records that the reference could not be authorized at turn start, without distinguishing unknown IDs, inaccessible workflows, or lookup failures. These entries preserve the user's reference intent without exposing workflow content; the frontend restores reference chips from this metadata. The field is omitted when there are no references. Assistant turns carry {text} — the final answer text (or error copy on a failed turn). Omitted when empty (e.g. an assistant message still streaming). Per-turn token accounting is NOT included here; it is surfaced on the agent_message_done WebSocket broadcast. tool_calls is an optional array of ToolCallSummary, attached to an assistant message that has persisted terminal (ok/error) tool-call rows — it lets a chat reload render the tool history a turn produced instead of showing nothing until the next live turn. Omitted when the message has no such rows.
    */
   content?: {
     attachment_refs?: Array<{
@@ -7429,7 +8002,7 @@ export type DeleteAssetErrors = {
    */
   404: ErrorResponse
   /**
-   * Asset cannot be deleted because it is referenced by another resource, e.g. a workflow version (error code: ASSET_IN_USE)
+   * Asset cannot be deleted because it is referenced by another resource, e.g. a workflow version, or because content moderation still holds it (error code: ASSET_IN_USE for both; a moderation hold is deliberately not distinguishable)
    */
   409: ErrorResponse
   /**
@@ -9464,7 +10037,7 @@ export type PrepareRetentionFlowErrors = {
    */
   403: ForbiddenError
   /**
-   * Subscription does not support this flow
+   * Subscription does not support this flow, or cancellation offers are switched off
    */
   422: ErrorResponse
   /**
@@ -9836,7 +10409,11 @@ export type GetBillingUsageTimeSeriesData = {
      * key, a member's `person` and `source` views hold only their own
      * rows, and an `unattributed` group carries spend with no usable
      * identity so the groups still sum to the total. Elsewhere the response is an empty series with
-     * `not_available` set. Group keys for those three carry a matching
+     * `not_available` set. For an enabled workspace `product_line` and
+     * `model` are also read from the ledger when the range starts on or
+     * after the environment's ledger start, and from the invoice otherwise; a model the
+     * ledger has no name for is `unspecified`. Group keys for
+     * `product_line`, `model`, `person` and `source` carry a matching
      * entry in `group_labels`.
      *
      */
@@ -9847,6 +10424,32 @@ export type GetBillingUsageTimeSeriesData = {
       | 'product_line'
       | 'person'
       | 'source'
+    /**
+     * Keep only spend on this product line (a key the `product_line`
+     * grouping returns). The four `filter_*` parameters combine with each
+     * other and with the ledger groupings `product_line`, `model`,
+     * `person` and `source`, so a page can drill from a line to its
+     * models to the people behind one model. They apply only to
+     * ledger-served reads of an enabled workspace: on any other read,
+     * including the invoice groupings `product` and `endpoint`, the
+     * response is an empty series with `not_available` reason
+     * `filter_needs_ledger`. A member's view is still only their own
+     * rows: filtering on a colleague returns nothing.
+     *
+     */
+    filter_product_line?: string
+    /**
+     * Keep only spend on this model (a key the `model` grouping returns, `unspecified` for none). See `filter_product_line`.
+     */
+    filter_model?: string
+    /**
+     * Keep only spend by this member (a key the `person` grouping returns, or `unattributed`). See `filter_product_line`.
+     */
+    filter_person?: string
+    /**
+     * Keep only spend from this source (a key the `source` grouping returns, or `unattributed`). See `filter_product_line`.
+     */
+    filter_source?: string
     granularity?: 'hour' | 'day' | 'month'
     starting_on?: string
     ending_before?: string
@@ -9857,7 +10460,7 @@ export type GetBillingUsageTimeSeriesData = {
 
 export type GetBillingUsageTimeSeriesErrors = {
   /**
-   * Invalid time range
+   * Invalid time range or filter value
    */
   400: ErrorResponse
   /**

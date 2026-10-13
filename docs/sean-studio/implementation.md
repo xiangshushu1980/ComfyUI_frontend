@@ -205,4 +205,4 @@ An entity can own multiple independent concept-image branches. Each branch recei
 
 Pi target context includes the branch number and pairing metadata. Agents list branches by number and must select that exact branch when the user asks to revise one; they read only its description and paired prompt. The canvas labels branch resources and generation actions by number. Editing a description refreshes only its paired prompt, and the inspector's prompt-refresh action opens the session for that same branch. Generation carries the branch number into its immutable Run and candidate resources.
 
-Validation: `node --check server/workflows.mjs`, `node --check server/pi-bridge.mjs` and `git diff --check` pass. `pnpm typecheck` reaches one existing unrelated error: `agentWorkspaceLabel` is declared but unused in `WorkflowStudioView.vue`. No automated tests or browser walkthrough were run.
+Validation: `node --check server/workflows.mjs`, `node --check server/pi-bridge.mjs`, `git diff --check` and `pnpm typecheck` pass. No automated tests or browser walkthrough were run.

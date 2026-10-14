@@ -16,10 +16,7 @@
           v-model="projectId"
           :disabled="navigationBusy"
           aria-label="打开工程"
-          @change="
-            projectMenuOpen = false
-            openProject()
-          "
+          @change="handleProjectSelection"
         >
           <option value="">打开工程…</option>
           <option v-for="p in projects" :key="p.id" :value="p.id">
@@ -1814,6 +1811,10 @@ function openAgentConceptInCanvas() {
   const path = objectPath(entityId, objectHierarchy(objects.value))
   navigatePath(path)
   dismissCanvasNotice()
+}
+function handleProjectSelection() {
+  projectMenuOpen.value = false
+  void openProject()
 }
 async function openProject() {
   mediaPreview.value = null

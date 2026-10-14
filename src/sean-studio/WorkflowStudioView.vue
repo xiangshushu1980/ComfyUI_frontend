@@ -744,6 +744,15 @@
                 @change="saveResourceDetails(selected)"
               />
             </label>
+            <label v-if="selected.role === 'concept_brief'"
+              >讨论结论与选择依据<textarea
+                v-model="resourceDescription"
+                @change="saveResourceDetails(selected)"
+              />
+            </label>
+            <small v-if="selected.role === 'concept_brief'"
+              >只记录已确认的关键理由和取舍，不复制完整对话。</small
+            >
             <label v-if="selected.role === 'threeview_brief'"
               >三视图设计说明<textarea
                 v-model="resourceText"
@@ -2628,23 +2637,42 @@ function entityAgentConversations(entityId: string) {
   )
 }
 function resourceSessionId(resource: Obj) {
-  let sessionId = ''
+  let sessionId = resource.workflowSessionId || ''
+  if (
+    sessionId &&
+    sessions.value.some((item) => item.id === sessionId && !item.closed)
+  )
+    return sessionId
+  sessionId = ''
+  const scopedSession = sessions.value.findLast(
+    (item) =>
+      item.workflowId === 'CreateEntity' &&
+      item.targetId === resource.entityId &&
+      item.contextId === resource.id &&
+      !item.closed
+  )
+  if (scopedSession) return scopedSession.id
   if (resource.workflowRunId) {
     const run = runs.value.find((item) => item.id === resource.workflowRunId)
-    sessionId = run?.sessionId || ''
+    const runSession = sessions.value.find(
+      (item) => item.id === run?.sessionId && !item.closed
+    )
+    if (runSession) return runSession.id
   } else if (resource.role === 'reference') {
     const session =
       sessions.value.find(
         (item) =>
           item.workflowId === 'CreateEntity' &&
           item.targetId === resource.entityId &&
-          item.contextId === resource.id
+          item.contextId === resource.id &&
+          !item.closed
       ) ||
       sessions.value.find(
         (item) =>
           item.workflowId === 'CreateEntity' &&
           item.targetId === resource.entityId &&
-          String(item.goal || '').startsWith('参考图整理')
+          String(item.goal || '').startsWith('参考图整理') &&
+          !item.closed
       )
     sessionId = session?.id || ''
   }
@@ -2665,7 +2693,12 @@ function resourceAgentSession(resource: Obj) {
 async function startResourceConversation(resource: Obj) {
   workflowTargets.value.CreateEntity = resource.entityId
   workflowContexts.value.CreateEntity = resource.id
-  const goal = resource.role === 'reference' ? '参考图整理' : '图片设计修改'
+  const goal =
+    resource.role === 'concept_brief'
+      ? '概念图生成'
+      : resource.role === 'reference'
+        ? '参考图整理'
+        : '图片设计修改'
   await createWorkflowConversation('CreateEntity', goal)
 }
 async function enterWorkflow(
@@ -2916,11 +2949,28 @@ async function rejectCandidate(candidate: Obj) {
   }
 }
 async function saveResourceDetails(resource: Obj) {
-  const fields: Record<string, string> = { name: resourceName.value.trim() }
+  const fields: Record<string, string> = {}
+  const name = resourceName.value.trim()
+  if (name !== String(resource.name || '').trim()) fields.name = name
   if (resource.role === 'reference') {
-    fields.description = resourceDescription.value.trim()
-    if (resource.type === 'text') fields.text = resourceText.value
-  } else fields.text = resourceText.value
+    const description = resourceDescription.value.trim()
+    if (description !== String(resource.description || '').trim())
+      fields.description = description
+    if (
+      resource.type === 'text' &&
+      resourceText.value !== String(resource.text || '')
+    )
+      fields.text = resourceText.value
+  } else {
+    if (resourceText.value !== String(resource.text || ''))
+      fields.text = resourceText.value
+    if (resource.role === 'concept_brief') {
+      const description = resourceDescription.value.trim()
+      if (description !== String(resource.description || '').trim())
+        fields.description = description
+    }
+  }
+  if (!Object.keys(fields).length) return
   try {
     const updated = await studioApi(
       `/resources/${resource.id}`,

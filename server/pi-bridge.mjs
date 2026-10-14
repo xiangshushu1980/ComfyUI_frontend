@@ -51,6 +51,7 @@ const contextFields = new Set([
   'selectedReferenceIds',
   'conceptPlanId',
   'conceptId',
+  'workflowSessionId',
   'proposalId',
   'origin',
   'stage',
@@ -1154,6 +1155,7 @@ export class PiBridge {
               prompt:
                 'required for prepare_concept and generate_concept; generate_concept uses the saved paired prompt',
               description: 'prepare_concept: user-confirmed visual description, max 12000 chars; creates a branch under the entity root',
+              decisionNote: 'prepare_concept: optional concise user-confirmed discussion outcome and reason for this concept; stored on the design node separately from the image description and prompt',
               conceptId: 'prepare_concept: optional positive concept branch number; update that exact existing branch. Omit to create a new numbered branch or update this conversation’s branch',
               confirmedPlan:
                 'prepare_concept: true only after the user confirms the concept direction, annotated reference usage and project-wide visual style in this conversation',
@@ -1198,7 +1200,7 @@ export class PiBridge {
             query: 'search: required text; searches only Workflow-visible objects unless projectEntities=true',
             projectEntities: 'search only: true is permitted only for ExtractEntities and searches entity candidates server-side',
             keys: 'project_settings: currently only visualStyle',
-            fields: 'requested fields: name, type, description, text, status, role, flags, sources, anchorIds, and supported linkage fields; defaults omit long text',
+            fields: 'requested fields: name, type, description, text, status, role, flags, sources, anchorIds, workflowSessionId, and supported linkage fields; defaults omit long text',
             depth: 'related graph depth, 1..3; default 1',
             limit: 'maximum 50 results, default 20',
             offset: 'pagination offset, default 0'

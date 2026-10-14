@@ -4,6 +4,8 @@ Owner: Sean. Independent ComfyUI frontend fork (GPL-3.0-only).
 
 Current phase: novel/chapter/entity data and manually supplied references/concept-image branches. The Agent plans in PiWeb; the user submits a confirmed branch from the canvas. Three-view and voice are deferred. Default generation mode is mock. [Construction progress and current acceptance boundary](progress-20261012.md) distinguishes current capabilities from older walkthroughs.
 
+Durable collaboration context and deletion behavior: [canvas and discussion records](collaboration-records.md).
+
 Upstream: Comfy-Org/ComfyUI_frontend v1.52.7, SHA 1a7a6b82514874545dc5e8203d0bd2188c2d9b18. Runtime baseline and node-definition hashes: `manifests/`. The development branch is `sean/entity-canvas-v1`; no publishing remote is configured.
 
 Use Node 24 for `scripts/sean-studio/run.sh start` (http://127.0.0.1:4318). Build/development uses private `.tools/node-v25.9.0-linux-x64` plus pnpm 11.13.1, preserving the upstream engine requirement. `run.sh build` checks types and builds; `run.sh dev` opens the frontend at port 5318 through the same private gateway; `run.sh test` runs domain, action, gateway and extension checks.

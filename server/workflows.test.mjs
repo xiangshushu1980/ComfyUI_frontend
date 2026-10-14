@@ -88,6 +88,8 @@ test('canvas deletes persisted node kinds independently and only hides active Ru
       role: 'concept_brief',
       type: 'text',
       text: '独立设计说明',
+      conceptId: 1,
+      conceptPlanId: 'plan:delete-test',
       status: 'available'
     })
   )
@@ -97,6 +99,7 @@ test('canvas deletes persisted node kinds independently and only hides active Ru
       role: 'concept_prompt',
       type: 'text',
       text: 'independent prompt',
+      conceptPlanId: brief.conceptPlanId,
       sourceResourceIds: [brief.id],
       status: 'available'
     })
@@ -107,6 +110,7 @@ test('canvas deletes persisted node kinds independently and only hides active Ru
       role: 'concept',
       type: 'image',
       assetId: asset.id,
+      workflowRunId: finishedRun.id,
       sourceResourceIds: [brief.id, prompt.id],
       status: 'candidate'
     })
@@ -114,15 +118,13 @@ test('canvas deletes persisted node kinds independently and only hides active Ru
 
   w.removeCanvasNode(p.id, brief.id, { expectedRevision: brief.revision })
   assert.equal(store.get(brief.id).status, 'removed')
-  assert.equal(store.get(prompt.id).status, 'available')
-  assert.equal(store.get(image.id).status, 'candidate')
-
-  w.removeCanvasNode(p.id, prompt.id, { expectedRevision: prompt.revision })
   assert.equal(store.get(prompt.id).status, 'removed')
   assert.equal(store.get(image.id).status, 'candidate')
+  assert.equal(store.get(finishedRun.id).status, 'succeeded')
 
   w.removeCanvasNode(p.id, image.id, { expectedRevision: image.revision })
   assert.equal(store.get(image.id).status, 'removed')
+  assert.equal(store.get(finishedRun.id).status, 'succeeded')
 
   const activeRun = store.transaction(() =>
     store.create(p.id, 'workflow_run', { stage: 'concept', status: 'running' })
@@ -144,6 +146,66 @@ test('canvas deletes persisted node kinds independently and only hides active Ru
     w.removeCanvasNode(p.id, p.id, { expectedRevision: p.revision })
   )
 
+  f.close()
+})
+test('confirmed discussion rationale survives a removed conversation and is available to a fresh Workflow', () => {
+  const f = fixture(), { store, workflows: w, project: p } = f
+  store.updateProjectSettings(p.id, p.revision, {
+    visualStyle: {
+      text: 'Confirmed watercolor style',
+      presetId: 'watercolor_illustration',
+      confirmed: true,
+      revision: 1
+    }
+  })
+  const entity = store.transaction(() =>
+    store.create(p.id, 'entity', { name: '测试角色', type: 'character' })
+  )
+  const first = store.transaction(() =>
+    w.open(p.id, {
+      workflowId: 'CreateEntity',
+      targetId: entity.id,
+      goal: '概念图生成'
+    })
+  )
+  store.transaction(() =>
+    w.authorize(first.id, { confirmed: true, conceptCount: 1 })
+  )
+  const plan = w.operate(first.id, 'prepare_concept', {
+    requestId: 'decision-plan',
+    confirmedPlan: true,
+    description: '半身构图，蓝围巾和酒红夹克',
+    decisionNote: '保留蓝围巾作为身份线索；拳击感仅用训练夹克表达，避免添加手套和场景。',
+    prompt: 'Half-body watercolor character with a blue scarf and burgundy jacket.',
+    referenceIds: []
+  })
+  assert.equal(plan.brief.description, '保留蓝围巾作为身份线索；拳击感仅用训练夹克表达，避免添加手套和场景。')
+  w.updateEntityResource(p.id, entity.id, {
+    resourceId: plan.brief.id,
+    expectedRevision: plan.brief.revision,
+    fields: {
+      text: plan.brief.text,
+      description: '用户确认：拳击感由夹克传达，避免手套、器械和比赛场景。'
+    }
+  })
+  assert.equal(store.get(plan.prompt.id).status, 'available')
+
+  store.transaction(() => w.close(first.id))
+  const second = store.transaction(() =>
+    w.open(p.id, {
+      workflowId: 'CreateEntity',
+      targetId: entity.id,
+      goal: '概念图生成'
+    })
+  )
+  assert.notEqual(second.id, first.id)
+  assert.notEqual(second.discussionId, first.discussionId)
+  const recoveredBrief = w.context(second.id).objects.find(
+    (object) => object.id === plan.brief.id
+  )
+  assert.equal(recoveredBrief.description, '用户确认：拳击感由夹克传达，避免手套、器械和比赛场景。')
+  assert.equal(recoveredBrief.text, plan.brief.text)
+  assert.ok(w.context(second.id).objects.some((object) => object.id === plan.prompt.id))
   f.close()
 })
 test('editing concept description invalidates its prompt until the prompt is refreshed', () => {
@@ -224,11 +286,13 @@ test('chapter extraction supports individual human adoption and stable relations
         selectedKeys: [key]
       })
     )
-  const first = confirm('a')
+  const resolved = store.get(result.proposal.id).resolved
+  const first = store.get(resolved.a.objectId)
+  assert.deepEqual(first.flags, ['ai-created'])
+  assert.equal(store.get(resolved.b.objectId).origin, 'ai_agent')
   assert.equal(store.get(result.proposal.id).status, 'pending')
-  confirm('b')
   const relation = confirm('r')
-  assert.equal(relation.adopted[0].fromId, first.adopted[0].id)
+  assert.equal(relation.adopted[0].fromId, first.id)
   assert.equal(store.get(result.run.id).status, 'succeeded')
   assert.equal(
     store.list(p.id, 'data_relation').filter((r) => r.type === 'mentions')
@@ -245,6 +309,14 @@ test('concept planning never submits; canvas generation is bounded, idempotent a
   const f = fixture(), { store, workflows: w, project: p } = f
   try {
     const entity = store.transaction(() => store.create(p.id, 'entity', { name: '林乔', type: 'character', description: '黑色短发' }))
+    store.updateProjectSettings(p.id, store.project(p.id).revision, {
+      visualStyle: {
+        text: 'Confirmed cinematic style',
+        presetId: 'cinematic_realism',
+        confirmed: true,
+        revision: 1
+      }
+    })
     const s = store.transaction(() => w.open(p.id, { workflowId: 'CreateEntity', targetId: entity.id, goal: '概念图生成' }))
     store.transaction(() => w.authorize(s.id, { confirmed: true, conceptCount: 1, threeView: false }))
     const plan = w.operate(s.id, 'prepare_concept', { requestId: 'plan', confirmedPlan: true, description: '半身人物', prompt: 'Portrait of a woman with short black hair.', visualStyle: '电影写实', referenceIds: [] })

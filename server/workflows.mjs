@@ -979,7 +979,11 @@ export class Workflows {
       this.cancelPendingImageRuns(projectId, entity.id, resource.id)
       return updated
     }
-    if (resource.role === 'concept_brief' && fields.text !== undefined) {
+    if (
+      resource.role === 'concept_brief' &&
+      fields.text !== undefined &&
+      fields.text !== resource.text
+    ) {
       for (const prompt of this.store.list(projectId, 'resource').filter((item) =>
         item.entityId === entity.id && item.role === 'concept_prompt' &&
         item.conceptPlanId === resource.conceptPlanId && item.status !== 'removed'
@@ -1275,9 +1279,11 @@ export class Workflows {
     const entity = this.store.sameProject(s.targetId, s.projectId, 'entity')
     const description = String(body.description || '').trim()
     const prompt = String(body.prompt || '').trim()
+    const decisionNote = String(body.decisionNote || '').trim()
     requireThat(body.confirmedPlan === true, 'user must confirm concept direction first', 403)
     requireThat(description.length > 0 && description.length <= 12000, 'description required (max 12000 chars)')
     requireThat(prompt.length > 0 && prompt.length <= 12000, 'prompt required (max 12000 chars)')
+    requireThat(decisionNote.length <= 12000, 'decision note too long')
     const projectStyle = projectVisualStyle(this.store.project(s.projectId))
     requireThat(
       projectStyle.confirmed && projectStyle.text.trim(),
@@ -1326,12 +1332,14 @@ export class Workflows {
       conceptPlanId,
       status: 'available'
     }
-    const brief = existingBrief
+    let brief = existingBrief
       ? this.store.update(existingBrief.id, existingBrief.revision, briefFields)
       : this.store.create(s.projectId, 'resource', {
           name: `概念图 ${conceptId} · 设计说明`, entityId: entity.id, role: 'concept_brief', type: 'text', conceptId,
-          description: '', parentId: entity.id, ...briefFields
+          description: decisionNote, parentId: entity.id, ...briefFields
         })
+    if (existingBrief && body.decisionNote !== undefined && decisionNote !== existingBrief.description)
+      brief = this.store.update(brief.id, brief.revision, { description: decisionNote })
     const promptSources = [brief.id, intro.id, ...notedReferences.map((resource) => resource.id)]
     const promptNode = existingPrompt
       ? this.store.update(existingPrompt.id, existingPrompt.revision, {

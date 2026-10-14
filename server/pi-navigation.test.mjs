@@ -34,6 +34,41 @@ test('exact session must enter native catalog before returning its navigation UR
   assert.equal(sent, undefined)
 })
 
+test('bounded Workflow context accepts workflowSessionId to map canvas plans to conversations', () => {
+  const bridge = new PiBridge({}, '/private')
+  const entity = { id: 'entity', kind: 'entity', revision: 1, name: '人物' }
+  const brief = {
+    id: 'brief',
+    kind: 'resource',
+    revision: 2,
+    name: '概念图 1 · 设计说明',
+    role: 'concept_brief',
+    entityId: entity.id,
+    workflowSessionId: 'workflow-session'
+  }
+  const result = bridge.queryWorkflowContext(
+    {},
+    { targetId: entity.id, contextId: entity.id, workflowId: 'CreateEntity' },
+    { objects: [entity, brief] },
+    {
+      scope: 'target',
+      fields: ['name', 'role', 'entityId', 'workflowSessionId']
+    }
+  )
+  assert.deepEqual(result.objects, [
+    { id: entity.id, kind: 'entity', revision: 1, name: '人物' },
+    {
+      id: brief.id,
+      kind: 'resource',
+      revision: 2,
+      name: '概念图 1 · 设计说明',
+      role: 'concept_brief',
+      entityId: entity.id,
+      workflowSessionId: 'workflow-session'
+    }
+  ])
+})
+
 test('product workspace deploys registered skills and their referenced documents', async () => {
   const { mkdtempSync, readFileSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')

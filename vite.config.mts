@@ -610,6 +610,8 @@ export default defineConfig({
       }
     },
     rolldownOptions: {
+      // Owner: Sean. Independent read-only scene entry avoids product Agent bootstrap.
+      input: { main: 'index.html', scene: 'src/sean-studio/scene.html' },
       treeshake: {
         manualPureFunctions: [
           'console.clear',

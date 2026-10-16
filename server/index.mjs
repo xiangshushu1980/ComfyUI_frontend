@@ -15,6 +15,7 @@ import { Workflows, definitions } from './workflows.mjs'
 import { ingestPng, thumbnail } from './media.mjs'
 import { compileQwen, verifyWorkflow } from './qwen.mjs'
 import { nativeGateway, readBody } from './gateway.mjs'
+import { SceneProjection, sceneRoute } from './scene-projection.mjs'
 const execFileAsync = promisify(execFile)
 
 async function openInWindowsExplorer(path) {
@@ -54,6 +55,7 @@ export function createStudioServer({
   comfyUrl = process.env.COMFY_URL || 'http://127.0.0.1:8188',
   dist = resolve('dist')
 } = {}) {
+  const sceneProjection = new SceneProjection()
   const store = new Store(join(dataDir, 'studio.sqlite'))
   const execution = new Execution(store, dataDir, comfyUrl)
   const pi = new PiBridge(store, dataDir)
@@ -91,6 +93,7 @@ export function createStudioServer({
       res.end(JSON.stringify(body))
     }
     try {
+      if (await sceneRoute(sceneProjection, req, res, url)) return
       // Browser writes are same-origin; no permissive CORS.
       if (!['GET', 'HEAD'].includes(req.method) && req.headers.origin)
         requireThat(

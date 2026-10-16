@@ -2,6 +2,7 @@
 <template>
   <div class="workspace">
     <div class="floating-brand">
+      <a href="/src/sean-studio/scene.html" style="color: #9fd5ff">3D 场景</a>
       <button
         type="button"
         class="project-menu-trigger"

@@ -114,7 +114,7 @@ export function radialPositions(
     ring = 1
   while (offset < sizes.length) {
     const count = Math.min(6 * ring, sizes.length - offset)
-    const radius = Math.max(spacing, (spacing * count) / (2 * Math.PI)) * ring
+    const radius = spacing * ring
     for (let i = 0; i < count; i++) {
       const angle = -Math.PI / 2 + (i * Math.PI * 2) / count
       positions.push([Math.cos(angle) * radius, Math.sin(angle) * radius])
@@ -123,4 +123,50 @@ export function radialPositions(
     ring++
   }
   return positions
+}
+
+// Prefer a line for a short branch or a connected chain, and a fan for richer branches.
+export function relatedPositions(
+  items: { item: { id: string }; width: number; height: number }[],
+  edges: { from: string; to: string }[],
+  groups: Map<string, SceneResultGroup>
+): [number, number][] {
+  const owners = new Map<string, string>()
+  for (const item of items)
+    for (const file of groups.get(item.item.id)?.files || [])
+      owners.set(file.id, item.item.id)
+  const neighbors = new Map(
+    items.map((item) => [item.item.id, new Set<string>()])
+  )
+  for (const edge of edges) {
+    const a = owners.get(edge.from),
+      b = owners.get(edge.to)
+    if (a && b && a !== b) {
+      neighbors.get(a)!.add(b)
+      neighbors.get(b)!.add(a)
+    }
+  }
+  const endpoint = items.find((item) => neighbors.get(item.item.id)!.size === 1)
+  const order: string[] = []
+  if (endpoint && [...neighbors.values()].every((n) => n.size <= 2)) {
+    let next: string | undefined = endpoint.item.id
+    while (next && !order.includes(next)) {
+      order.push(next)
+      next = [...neighbors.get(next)!].find((id) => !order.includes(id))
+    }
+  }
+  if (items.length <= 3 || order.length === items.length) {
+    const sequence =
+      order.length === items.length ? order : items.map((i) => i.item.id)
+    let x = 340
+    const positions = new Map<string, [number, number]>()
+    for (const id of sequence) {
+      const item = items.find((i) => i.item.id === id)!
+      x += item.width / 2
+      positions.set(id, [x, 0])
+      x += item.width / 2 + 100
+    }
+    return items.map((item) => positions.get(item.item.id)!)
+  }
+  return radialPositions(items)
 }

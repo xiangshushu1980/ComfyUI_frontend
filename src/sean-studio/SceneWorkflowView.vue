@@ -6,7 +6,6 @@
     <CanvasToolbar aria-label="场景工作流">
       <template #location>
         <div class="scene-location">
-          <a :href="graphHref">创作图谱</a>
           <strong>3D 场景 · 只读</strong>
         </div>
       </template>
@@ -19,40 +18,12 @@
       <button :disabled="busy || !sceneId" @click="load(false)">
         刷新结果
       </button>
-      <button @click="overview">总览</button>
-      <select
-        :value="focusedStage ?? ''"
-        aria-label="查看步骤"
-        @change="
-          ($event.target as HTMLSelectElement).value === ''
-            ? overview()
-            : openStage(Number(($event.target as HTMLSelectElement).value))
-        "
+      <button
+        v-if="focusedStage !== null || selected || selectedGroup"
+        @click="overview"
       >
-        <option value="">全部步骤</option>
-        <option
-          v-for="(name, index) in SCENE_STEP_NAMES"
-          :key="name"
-          :value="index"
-        >
-          {{ index + 1 }}. {{ name }}
-        </option>
-      </select>
-      <template v-if="focusedStage !== null">
-        <button :disabled="focusedPage === 0" @click="changePage(-1)">
-          上一组
-        </button>
-        <span
-          >{{ focusedPage + 1 }} /
-          {{ Math.max(1, Math.ceil(stageGroupCount / 6)) }}</span
-        >
-        <button
-          :disabled="(focusedPage + 1) * 6 >= stageGroupCount"
-          @click="changePage(1)"
-        >
-          下一组
-        </button>
-      </template>
+        回到最外层
+      </button>
       <button @click="fit">适配画布</button>
       <button
         :aria-expanded="settingsOpen"
@@ -99,7 +70,7 @@
       <button
         class="scene-close"
         aria-label="关闭结果详情"
-        @click="selectedGroup = null"
+        @click="closeDetails"
       >
         ×
       </button>
@@ -128,8 +99,10 @@
       {{
         focusedStage === null
           ? '流程总览 · 点击步骤，展开该步的资产和结果'
-          : SCENE_STEP_DESCRIPTIONS[focusedStage] + ' · 点击结果查看文件与版本'
-      }}<br />实线箭头：制作顺序　虚线：所属步骤　选中结果：显示文件引用
+          : SCENE_STEP_DESCRIPTIONS[focusedStage] +
+            ' · 点击结果查看文件与版本，拖动调整位置'
+      }}<br />鼠标侧键 4 后退 / 5 前进 ·
+      实线箭头：制作顺序　虚线：所属步骤　选中结果：显示文件引用
     </div>
     <aside
       v-if="selected"
@@ -139,11 +112,7 @@
         backgroundColor: `rgba(22, 40, 52, ${canvasSettings.panelOpacity})`
       }"
     >
-      <button
-        class="scene-close"
-        aria-label="关闭详情"
-        @click="selected = null"
-      >
+      <button class="scene-close" aria-label="关闭详情" @click="closeDetails">
         ×
       </button>
       <h2>{{ selected.title }}</h2>
@@ -216,7 +185,7 @@ import {
 import type { CanvasSettings } from './canvasSettings'
 import {
   groupSceneResults,
-  radialPositions,
+  relatedPositions,
   SCENE_STEP_NAMES,
   SCENE_STEP_DESCRIPTIONS
 } from './scenePresentation'
@@ -252,11 +221,6 @@ const projectId = ref(
     localStorage.getItem('sean-studio-project') ||
     ''
 )
-const graphHref = computed(() =>
-  projectId.value
-    ? `../../#/canvas/${encodeURIComponent(projectId.value)}`
-    : '../../'
-)
 const projection = ref<Projection | null>(null)
 const selected = ref<Artifact | null>(null)
 const canvasSettings = ref<CanvasSettings>(loadCanvasSettings())
@@ -278,15 +242,6 @@ let graph: LGraph,
   observer: ResizeObserver,
   request = 0
 const focusedStage = ref<number | null>(null)
-const focusedPage = ref(0)
-const stageGroupCount = computed(
-  () =>
-    resultGroups.value.filter(
-      (g) =>
-        g.stage === focusedStage.value &&
-        (!imagesOnly.value || g.files.some((f) => f.image))
-    ).length
-)
 const selectedGroup = ref<SceneResultGroup | null>(null)
 const resultGroups = computed(() =>
   groupSceneResults(projection.value?.nodes || [])
@@ -295,40 +250,115 @@ const nodeGroups = new Map<string, SceneResultGroup>()
 const hubStages = new Map<string, number>()
 const stageCenters: [number, number][] = [
   [0, 0],
-  [640, -80],
+  [640, 0],
   [1280, 0],
-  [1050, 600],
-  [300, 600]
+  [1920, 0],
+  [2560, 0]
 ]
 const stepLinks = ['准备资产', '使用资产搭建', '按布局查看', '检查结果']
-function changePage(delta: number) {
-  focusedPage.value += delta
-  selectedGroup.value = null
-  selected.value = null
-  draw(true)
+type ViewState = {
+  stage: number | null
+  group: string | null
+  file: string | null
+  scale: number
+  offset: [number, number]
+}
+const backViews: ViewState[] = [],
+  forwardViews: ViewState[] = []
+function captureView(): ViewState {
+  return {
+    stage: focusedStage.value,
+    group: selectedGroup.value?.id || null,
+    file: selected.value?.id || null,
+    scale: canvas.ds.scale,
+    offset: [canvas.ds.offset[0], canvas.ds.offset[1]]
+  }
+}
+function rememberView() {
+  backViews.push(captureView())
+  forwardViews.length = 0
+}
+function restoreView(view: ViewState) {
+  focusedStage.value = view.stage
+  selectedGroup.value =
+    resultGroups.value.find((g) => g.id === view.group) || null
+  selected.value =
+    projection.value?.nodes.find((n) => n.id === view.file) || null
+  draw(false)
+  canvas.ds.scale = view.scale
+  canvas.ds.offset = [...view.offset]
+  canvas.setDirty(true, true)
+}
+function mouseHistory(event: MouseEvent) {
+  if (event.button !== 3 && event.button !== 4) return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  if (event.type !== 'pointerup') return
+  const source = event.button === 3 ? backViews : forwardViews
+  const target = event.button === 3 ? forwardViews : backViews
+  const view = source.pop()
+  if (view) {
+    target.push(captureView())
+    restoreView(view)
+  }
 }
 function changeImageFilter() {
   selectedGroup.value = null
   selected.value = null
-  focusedPage.value = 0
   draw(true)
 }
 function overview() {
+  rememberView()
   focusedStage.value = null
   selectedGroup.value = null
   selected.value = null
   draw(true)
 }
 function openStage(stage: number) {
+  if (focusedStage.value === stage) return
+  rememberView()
   focusedStage.value = stage
-  focusedPage.value = 0
   selectedGroup.value = null
   selected.value = null
   draw(true)
 }
 function openFile(path: string) {
-  selectedGroup.value = null
   selectPath(path)
+}
+function closeDetails() {
+  rememberView()
+  selectedGroup.value = null
+  selected.value = null
+  canvas.setDirty(true, true)
+}
+const layoutCache = new Map<string, Record<string, [number, number]>>()
+function layoutKey() {
+  return `sean-scene-positions-v1:${sceneId.value}:${focusedStage.value ?? 'overview'}`
+}
+function savedPositions() {
+  const key = layoutKey()
+  if (!layoutCache.has(key)) {
+    try {
+      const value = JSON.parse(localStorage.getItem(key) || '{}')
+      layoutCache.set(
+        key,
+        value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+      )
+    } catch {
+      layoutCache.set(key, {})
+    }
+  }
+  return layoutCache.get(key)!
+}
+function persistPosition(node: LGraphNode) {
+  const id = nodePaths.get(node)
+  if (!id) return
+  savedPositions()[id] = [node.pos[0], node.pos[1]]
+  try {
+    localStorage.setItem(layoutKey(), JSON.stringify(savedPositions()))
+  } catch {
+    /* Presentation remains usable without storage. */
+  }
 }
 let disposed = false
 const logicalViewport = new Float64Array(4)
@@ -403,6 +433,7 @@ function selectPath(path: string) {
   }
   const group = nodeGroups.get(path)
   if (group) {
+    rememberView()
     selectedGroup.value = group
     selected.value = null
     canvas.setDirty(true, true)
@@ -410,6 +441,8 @@ function selectPath(path: string) {
   }
   const node = projection.value?.nodes.find((n) => n.id === path)
   if (node) {
+    rememberView()
+    selectedGroup.value = null
     selected.value = node
     canvas.setDirty(true, true)
   }
@@ -421,6 +454,8 @@ async function load(reset = false) {
     selected.value = null
     selectedGroup.value = null
     focusedStage.value = null
+    backViews.length = 0
+    forwardViews.length = 0
     images.clear()
     projection.value = null
     graph.clear()
@@ -485,9 +520,7 @@ function draw(reset = false) {
   const visibleGroups =
     focusedStage.value === null
       ? []
-      : groups
-          .filter((g) => g.stage === focusedStage.value)
-          .slice(focusedPage.value * 6, focusedPage.value * 6 + 6)
+      : groups.filter((g) => g.stage === focusedStage.value)
   const items = visibleGroups.map((group) => {
     nodeGroups.set(group.id, group)
     return { ...group.preview, id: group.id, title: group.title }
@@ -573,7 +606,7 @@ function draw(reset = false) {
     const children = prepared.filter(
       (p) => p.item.stage === stage && p.item.kind !== 'step'
     )
-    const offsets = radialPositions(children)
+    const offsets = relatedPositions(children, data.edges, nodeGroups)
     children.forEach((entry, index) =>
       positions.set(entry.item.id, [
         center[0] + offsets[index][0],
@@ -592,7 +625,11 @@ function draw(reset = false) {
   } of prepared) {
     const node = new LGraphNode(item.title)
     const position = positions.get(item.id) || [0, 0]
-    node.pos = [position[0] - width / 2, position[1] - height / 2]
+    const saved = savedPositions()[item.id]
+    node.pos =
+      Array.isArray(saved) && saved.length === 2 && saved.every(Number.isFinite)
+        ? [...saved]
+        : [position[0] - width / 2, position[1] - height / 2]
     node.size = [width, height]
     node.color =
       item.status === 'unknown'
@@ -748,8 +785,14 @@ onMounted(async () => {
     // These arrows explain the workflow, not verified file dependencies.
     if (focusedStage.value === null) {
       for (let stage = 0; stage < 4; stage++) {
-        const from = stageCenters[stage],
-          to = stageCenters[stage + 1]
+        const first = renderedNodes.get(`step:${stage}`),
+          last = renderedNodes.get(`step:${stage + 1}`)
+        if (!first || !last) continue
+        const from = [
+            first.pos[0] + first.size[0] / 2,
+            first.pos[1] + first.size[1] / 2
+          ],
+          to = [last.pos[0] + last.size[0] / 2, last.pos[1] + last.size[1] / 2]
         const angle = Math.atan2(to[1] - from[1], to[0] - from[0])
         const x1 = from[0] + Math.cos(angle) * 155,
           y1 = from[1] + Math.sin(angle) * 155
@@ -853,36 +896,91 @@ onMounted(async () => {
     },
     true
   )
-  let start = [0, 0]
+  const hitNode = (event: PointerEvent) => {
+    const [x, y] = canvas.convertEventToCanvasOffset(event)
+    return [...graph.nodes]
+      .reverse()
+      .find(
+        (n) =>
+          x >= n.pos[0] &&
+          x <= n.pos[0] + n.size[0] &&
+          y >= n.pos[1] &&
+          y <= n.pos[1] + n.size[1]
+      )
+  }
+  let drag: {
+    node: LGraphNode
+    pointer: number
+    start: [number, number]
+    pos: [number, number]
+    moved: boolean
+  } | null = null
   element.value!.addEventListener(
     'pointerdown',
-    (e) => {
-      start = [e.clientX, e.clientY]
+    (event) => {
+      if (event.button !== 0) return
+      const node = hitNode(event)
+      if (!node) return
+      drag = {
+        node,
+        pointer: event.pointerId,
+        start: [event.clientX, event.clientY],
+        pos: [node.pos[0], node.pos[1]],
+        moved: false
+      }
+      element.value!.setPointerCapture(event.pointerId)
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    },
+    true
+  )
+  element.value!.addEventListener(
+    'pointermove',
+    (event) => {
+      if (!drag || drag.pointer !== event.pointerId) return
+      const dx = event.clientX - drag.start[0],
+        dy = event.clientY - drag.start[1]
+      if (Math.hypot(dx, dy) > 5) drag.moved = true
+      if (drag.moved) {
+        drag.node.pos = [
+          drag.pos[0] + dx / canvas.ds.scale,
+          drag.pos[1] + dy / canvas.ds.scale
+        ]
+        canvas.setDirty(true, true)
+      }
+      event.preventDefault()
+      event.stopImmediatePropagation()
     },
     true
   )
   element.value!.addEventListener(
     'pointerup',
-    (e) => {
-      if (
-        e.button !== 0 ||
-        Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 5
-      )
-        return
-      const [x, y] = canvas.convertEventToCanvasOffset(e)
-      const node = [...graph.nodes]
-        .reverse()
-        .find(
-          (n) =>
-            x >= n.pos[0] &&
-            x <= n.pos[0] + n.size[0] &&
-            y >= n.pos[1] &&
-            y <= n.pos[1] + n.size[1]
-        )
-      if (node) selectPath(nodePaths.get(node)!)
+    (event) => {
+      if (!drag || drag.pointer !== event.pointerId) return
+      const finished = drag
+      drag = null
+      element.value!.releasePointerCapture(event.pointerId)
+      if (finished.moved) persistPosition(finished.node)
+      else selectPath(nodePaths.get(finished.node)!)
+      event.preventDefault()
+      event.stopImmediatePropagation()
     },
     true
   )
+  element.value!.addEventListener(
+    'pointercancel',
+    () => {
+      if (drag) {
+        drag.node.pos = drag.pos
+        drag = null
+        canvas.setDirty(true, true)
+      }
+    },
+    true
+  )
+  window.addEventListener('pointerdown', mouseHistory, true)
+  window.addEventListener('pointerup', mouseHistory, true)
+  window.addEventListener('auxclick', mouseHistory, true)
   const computeVisibleArea = canvas.ds.computeVisibleArea.bind(canvas.ds)
   canvas.ds.computeVisibleArea = () => computeVisibleArea(logicalViewport)
   const resize = () => {
@@ -914,6 +1012,9 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', mouseHistory, true)
+  window.removeEventListener('pointerup', mouseHistory, true)
+  window.removeEventListener('auxclick', mouseHistory, true)
   disposed = true
   request++
   observer?.disconnect()

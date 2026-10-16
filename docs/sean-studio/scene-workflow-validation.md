@@ -25,7 +25,7 @@ Owner: Sean。2026-10-16，任务 `remote-4285562b-c597-4fb4-97e9-e4448f2cea78`�
 
 ## 自动检查与限制
 
-新增 `server/scene-projection.test.mjs` 的来源/边界检查通过，含外部路径与存在但未投影的二进制分支。Vue 类型检查、该 Vue/TS 的 ESLint、Vue Stylelint、生产 Vite 构建通过；构建包含 `dist/src/sean-studio/scene.html`。构建有上游已有的样式、动态导入和外部 CSS 告警。
+新增 `server/scene-projection.test.mjs` 的来源/边界检查通过，含外部路径与存在但未投影的二进制分支。Vue 类型检查、该 Vue/TS 的 ESLint、Vue Stylelint、生产 Vite 构建通过；构建包含 `dist/src/sean-studio/scene.html`。构建有上游已有的样式、动态导入和外部 CSS 告警。Knip 配置显式登记独立 scene-main.ts 入口，避免 HTML 多入口未被识别而误报未使用。
 
 完整 `node --test server/*.test.mjs`：33 项，28 通过、5 失败。5 项全位于 `execution.test.mjs`，原因均为 fixture 未确认项目全局视觉风格。将未修改 HEAD 的 server/templates/manifests/docs/sean-studio 导出至临时目录，单独运行该文件，复现相同 5 项失败及相同错误 `confirm the project-wide visual style before generating`。本次未修改生成逻辑和这些旧测试。新增投影测试通过，不将全套回归报告为全绿。
 

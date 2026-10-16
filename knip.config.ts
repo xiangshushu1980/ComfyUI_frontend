@@ -9,6 +9,8 @@ const config: KnipConfig = {
         '{build,scripts}/**/*.{js,ts}',
         'vitest.matrix.config.mts',
         'src/assets/css/style.css',
+        // Owner: Sean. Independent HTML entry for the read-only scene canvas.
+        'src/sean-studio/scene-main.ts',
         'src/scripts/ui/menu/index.ts',
         'src/types/index.ts',
         'src/storybook/mocks/**/*.ts',

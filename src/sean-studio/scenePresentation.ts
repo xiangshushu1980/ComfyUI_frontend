@@ -102,7 +102,7 @@ export function groupSceneResults(nodes: SceneArtifact[]): SceneResultGroup[] {
 }
 
 // Rings use the largest card diagonal to keep unequal image cards apart.
-export function radialPositions(
+function radialPositions(
   sizes: { width: number; height: number }[]
 ): [number, number][] {
   const spacing = Math.max(

@@ -279,6 +279,7 @@ function rememberView() {
   forwardViews.length = 0
 }
 function restoreView(view: ViewState) {
+  autoFitImages = false
   focusedStage.value = view.stage
   selectedGroup.value =
     resultGroups.value.find((g) => g.id === view.group) || null
@@ -360,6 +361,7 @@ function persistPosition(node: LGraphNode) {
     /* Presentation remains usable without storage. */
   }
 }
+let autoFitImages = false
 let disposed = false
 const logicalViewport = new Float64Array(4)
 const nodePaths = new Map<LGraphNode, string>()
@@ -507,6 +509,7 @@ function fit() {
   canvas.setDirty(true, true)
 }
 function draw(reset = false) {
+  if (reset) autoFitImages = true
   graph.clear()
   nodePaths.clear()
   renderedNodes.clear()
@@ -549,7 +552,10 @@ function draw(reset = false) {
     if (item.image && !image && !jsonNode) {
       image = new Image()
       image.onload = () => {
-        if (!disposed) draw(false)
+        if (!disposed) {
+          draw(false)
+          if (autoFitImages) fit()
+        }
       }
       image.src = fileUrl(nodeGroups.get(item.id)?.preview.id || item.id)
       images.set(item.id, image)
@@ -918,6 +924,7 @@ onMounted(async () => {
   element.value!.addEventListener(
     'pointerdown',
     (event) => {
+      autoFitImages = false
       if (event.button !== 0) return
       const node = hitNode(event)
       if (!node) return
@@ -977,6 +984,13 @@ onMounted(async () => {
       }
     },
     true
+  )
+  element.value!.addEventListener(
+    'wheel',
+    () => {
+      autoFitImages = false
+    },
+    { capture: true, passive: true }
   )
   window.addEventListener('pointerdown', mouseHistory, true)
   window.addEventListener('pointerup', mouseHistory, true)

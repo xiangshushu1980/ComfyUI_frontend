@@ -7,6 +7,9 @@
       <template #location>
         <div class="scene-location">
           <strong>3D 场景 · 只读</strong>
+          <span v-if="focusedStage !== null">
+            / {{ SCENE_STEP_NAMES[focusedStage] }}</span
+          >
         </div>
       </template>
       <select v-model="sceneId" aria-label="选择场景" @change="load(true)">
@@ -102,7 +105,7 @@
           : SCENE_STEP_DESCRIPTIONS[focusedStage] +
             ' · 点击结果查看文件与版本，拖动调整位置'
       }}<br />鼠标侧键 4 后退 / 5 前进 ·
-      实线箭头：制作顺序　虚线：所属步骤　选中结果：显示文件引用
+      实线箭头：制作顺序　选中结果：显示文件引用
     </div>
     <aside
       v-if="selected"
@@ -258,8 +261,6 @@ const stageCenters: [number, number][] = [
 const stepLinks = ['准备资产', '使用资产搭建', '按布局查看', '检查结果']
 type ViewState = {
   stage: number | null
-  group: string | null
-  file: string | null
   scale: number
   offset: [number, number]
 }
@@ -268,8 +269,6 @@ const backViews: ViewState[] = [],
 function captureView(): ViewState {
   return {
     stage: focusedStage.value,
-    group: selectedGroup.value?.id || null,
-    file: selected.value?.id || null,
     scale: canvas.ds.scale,
     offset: [canvas.ds.offset[0], canvas.ds.offset[1]]
   }
@@ -281,10 +280,8 @@ function rememberView() {
 function restoreView(view: ViewState) {
   autoFitImages = false
   focusedStage.value = view.stage
-  selectedGroup.value =
-    resultGroups.value.find((g) => g.id === view.group) || null
-  selected.value =
-    projection.value?.nodes.find((n) => n.id === view.file) || null
+  selectedGroup.value = null
+  selected.value = null
   draw(false)
   canvas.ds.scale = view.scale
   canvas.ds.offset = [...view.offset]
@@ -309,6 +306,10 @@ function changeImageFilter() {
   draw(true)
 }
 function overview() {
+  if (focusedStage.value === null) {
+    closeDetails()
+    return
+  }
   rememberView()
   focusedStage.value = null
   selectedGroup.value = null
@@ -327,7 +328,6 @@ function openFile(path: string) {
   selectPath(path)
 }
 function closeDetails() {
-  rememberView()
   selectedGroup.value = null
   selected.value = null
   canvas.setDirty(true, true)
@@ -435,7 +435,6 @@ function selectPath(path: string) {
   }
   const group = nodeGroups.get(path)
   if (group) {
-    rememberView()
     selectedGroup.value = group
     selected.value = null
     canvas.setDirty(true, true)
@@ -443,7 +442,6 @@ function selectPath(path: string) {
   }
   const node = projection.value?.nodes.find((n) => n.id === path)
   if (node) {
-    rememberView()
     selectedGroup.value = null
     selected.value = node
     canvas.setDirty(true, true)
@@ -529,7 +527,7 @@ function draw(reset = false) {
     return { ...group.preview, id: group.id, title: group.title }
   })
   for (let stage = 0; stage < 5; stage++) {
-    if (focusedStage.value !== null && stage !== focusedStage.value) continue
+    if (focusedStage.value !== null) continue
     const id = `step:${stage}`
     hubStages.set(id, stage)
     items.push({
@@ -827,24 +825,6 @@ onMounted(async () => {
         ctx.fillText(stepLinks[stage], (x1 + x2) / 2, (y1 + y2) / 2 - 14)
         ctx.restore()
       }
-    }
-    // Each result belongs to one step. Neutral spokes express membership.
-    for (const [id, group] of nodeGroups) {
-      const hub = renderedNodes.get(`step:${group.stage}`),
-        child = renderedNodes.get(id)
-      if (!hub || !child) continue
-      ctx.save()
-      ctx.strokeStyle = '#66809766'
-      ctx.lineWidth = 2
-      ctx.setLineDash([5, 7])
-      ctx.beginPath()
-      ctx.moveTo(hub.pos[0] + hub.size[0] / 2, hub.pos[1] + hub.size[1] / 2)
-      ctx.lineTo(
-        child.pos[0] + child.size[0] / 2,
-        child.pos[1] + child.size[1] / 2
-      )
-      ctx.stroke()
-      ctx.restore()
     }
     for (const edge of projection.value?.edges || []) {
       const from = renderedNodes.get(edge.from),

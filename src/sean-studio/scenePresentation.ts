@@ -158,7 +158,7 @@ export function relatedPositions(
   if (items.length <= 3 || order.length === items.length) {
     const sequence =
       order.length === items.length ? order : items.map((i) => i.item.id)
-    let x = 340
+    let x = 0
     const positions = new Map<string, [number, number]>()
     for (const id of sequence) {
       const item = items.find((i) => i.item.id === id)!

@@ -4,6 +4,8 @@ Owner: Sean。任务 `remote-4285562b-c597-4fb4-97e9-e4448f2cea78`。
 
 显示逻辑已在 2026-10-17 更新为步骤总览、结果归组与局部环形展开，见 [显示逻辑与微调交接](scene-display-handoff.md)。下文文件投影合同继续有效。
 
+过程语义展示的后续设计：[Agent 执行过程可视化](../design/scene-process-visualization.md)（设计稿，尚未实现；沿用现有 Agent + skill）。
+
 ## 使用与配置
 
 Studio 主画布左上角「3D 场景」打开独立页面 `/src/sean-studio/scene.html`。独立 Vue 入口复用项目 LiteGraph，不执行 ComfyUI 应用初始化，也不绑定或启动产品 Agent。Agent 暂由当前 Codex 会话操作制作 CLI。

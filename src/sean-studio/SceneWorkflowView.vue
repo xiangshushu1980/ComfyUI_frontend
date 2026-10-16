@@ -19,6 +19,40 @@
       <button :disabled="busy || !sceneId" @click="load(false)">
         刷新结果
       </button>
+      <button @click="overview">总览</button>
+      <select
+        :value="focusedStage ?? ''"
+        aria-label="查看步骤"
+        @change="
+          ($event.target as HTMLSelectElement).value === ''
+            ? overview()
+            : openStage(Number(($event.target as HTMLSelectElement).value))
+        "
+      >
+        <option value="">全部步骤</option>
+        <option
+          v-for="(name, index) in SCENE_STEP_NAMES"
+          :key="name"
+          :value="index"
+        >
+          {{ index + 1 }}. {{ name }}
+        </option>
+      </select>
+      <template v-if="focusedStage !== null">
+        <button :disabled="focusedPage === 0" @click="changePage(-1)">
+          上一组
+        </button>
+        <span
+          >{{ focusedPage + 1 }} /
+          {{ Math.max(1, Math.ceil(stageGroupCount / 6)) }}</span
+        >
+        <button
+          :disabled="(focusedPage + 1) * 6 >= stageGroupCount"
+          @click="changePage(1)"
+        >
+          下一组
+        </button>
+      </template>
       <button @click="fit">适配画布</button>
       <button
         :aria-expanded="settingsOpen"
@@ -30,7 +64,7 @@
         ><input
           v-model="imagesOnly"
           type="checkbox"
-          @change="draw(true)"
+          @change="changeImageFilter"
         />只看图片</label
       >
       <span v-if="projection"
@@ -56,6 +90,46 @@
           ? '读取工作区…'
           : '尚未配置场景。请按部署文档设置 STUDIO_3D_SCENES。')
       }}
+    </div>
+    <aside
+      v-if="selectedGroup"
+      class="scene-inspector"
+      :style="{ width: `min(${inspectorWidth}px, 85vw)` }"
+    >
+      <button
+        class="scene-close"
+        aria-label="关闭结果详情"
+        @click="selectedGroup = null"
+      >
+        ×
+      </button>
+      <h2>{{ selectedGroup.title }}</h2>
+      <p>
+        {{ SCENE_STEP_NAMES[selectedGroup.stage] }} ·
+        {{ selectedGroup.files.length }} 个文件
+      </p>
+      <p>同一结果的文件与修订归在一起。展示顺序不代表已采纳版本。</p>
+      <img
+        v-if="selectedGroup.preview.image"
+        :src="fileUrl(selectedGroup.preview.id)"
+        :alt="selectedGroup.title"
+      />
+      <h3>文件与版本</h3>
+      <button
+        v-for="file in selectedGroup.files"
+        :key="file.id"
+        class="scene-relation"
+        @click="openFile(file.id)"
+      >
+        {{ file.title }} · {{ file.status }}<br />{{ file.id }}
+      </button>
+    </aside>
+    <div v-if="projection" class="scene-guide">
+      {{
+        focusedStage === null
+          ? '流程总览 · 点击步骤，展开该步的资产和结果'
+          : SCENE_STEP_DESCRIPTIONS[focusedStage] + ' · 点击结果查看文件与版本'
+      }}<br />实线箭头：制作顺序　虚线：所属步骤　选中结果：显示文件引用
     </div>
     <aside
       v-if="selected"
@@ -132,7 +206,7 @@ import {
 import CanvasToolbar from './CanvasToolbar.vue'
 import CanvasSettingsPanel from './CanvasSettingsPanel.vue'
 import { CANVAS_NODE_COLORS, CANVAS_NODE_RADIUS } from './canvasNodeStyle'
-import { canvasNodeDisplayName, isJsonCanvasNode } from './canvasNodeName'
+import { isJsonCanvasNode } from './canvasNodeName'
 import {
   canvasSettingsStorageKey,
   DEFAULT_CANVAS_SETTINGS,
@@ -140,6 +214,13 @@ import {
   normalizeCanvasSettings
 } from './canvasSettings'
 import type { CanvasSettings } from './canvasSettings'
+import {
+  groupSceneResults,
+  radialPositions,
+  SCENE_STEP_NAMES,
+  SCENE_STEP_DESCRIPTIONS
+} from './scenePresentation'
+import type { SceneResultGroup } from './scenePresentation'
 
 type Artifact = {
   id: string
@@ -196,7 +277,59 @@ let graph: LGraph,
   canvas: LGraphCanvas,
   observer: ResizeObserver,
   request = 0
-let laneWidth = 400
+const focusedStage = ref<number | null>(null)
+const focusedPage = ref(0)
+const stageGroupCount = computed(
+  () =>
+    resultGroups.value.filter(
+      (g) =>
+        g.stage === focusedStage.value &&
+        (!imagesOnly.value || g.files.some((f) => f.image))
+    ).length
+)
+const selectedGroup = ref<SceneResultGroup | null>(null)
+const resultGroups = computed(() =>
+  groupSceneResults(projection.value?.nodes || [])
+)
+const nodeGroups = new Map<string, SceneResultGroup>()
+const hubStages = new Map<string, number>()
+const stageCenters: [number, number][] = [
+  [0, 0],
+  [640, -80],
+  [1280, 0],
+  [1050, 600],
+  [300, 600]
+]
+const stepLinks = ['准备资产', '使用资产搭建', '按布局查看', '检查结果']
+function changePage(delta: number) {
+  focusedPage.value += delta
+  selectedGroup.value = null
+  selected.value = null
+  draw(true)
+}
+function changeImageFilter() {
+  selectedGroup.value = null
+  selected.value = null
+  focusedPage.value = 0
+  draw(true)
+}
+function overview() {
+  focusedStage.value = null
+  selectedGroup.value = null
+  selected.value = null
+  draw(true)
+}
+function openStage(stage: number) {
+  focusedStage.value = stage
+  focusedPage.value = 0
+  selectedGroup.value = null
+  selected.value = null
+  draw(true)
+}
+function openFile(path: string) {
+  selectedGroup.value = null
+  selectPath(path)
+}
 let disposed = false
 const logicalViewport = new Float64Array(4)
 const nodePaths = new Map<LGraphNode, string>()
@@ -264,6 +397,17 @@ async function read<T>(url: string): Promise<T> {
   return response.json()
 }
 function selectPath(path: string) {
+  if (hubStages.has(path)) {
+    openStage(hubStages.get(path)!)
+    return
+  }
+  const group = nodeGroups.get(path)
+  if (group) {
+    selectedGroup.value = group
+    selected.value = null
+    canvas.setDirty(true, true)
+    return
+  }
   const node = projection.value?.nodes.find((n) => n.id === path)
   if (node) {
     selected.value = node
@@ -275,6 +419,9 @@ async function load(reset = false) {
   error.value = ''
   if (reset) {
     selected.value = null
+    selectedGroup.value = null
+    focusedStage.value = null
+    images.clear()
     projection.value = null
     graph.clear()
   }
@@ -288,6 +435,9 @@ async function load(reset = false) {
     const next = await read<Projection>(`${endpoint}/${encodeURIComponent(id)}`)
     if (disposed || sequence !== request) return
     projection.value = next
+    if (selectedGroup.value)
+      selectedGroup.value =
+        resultGroups.value.find((g) => g.id === selectedGroup.value?.id) || null
     selected.value = next.nodes.find((n) => n.id === selected.value?.id) || null
     const query = new URLSearchParams(location.search)
     query.set('scene', id)
@@ -310,10 +460,15 @@ function fit() {
   const scale = Math.min(
     1,
     (host.value.clientWidth - 60) / (right - left),
-    (host.value.clientHeight - 100) / (bottom - top)
+    (host.value.clientHeight - 180) / (bottom - top)
   )
   canvas.ds.scale = scale
-  canvas.ds.offset = [30 / scale - left, 50 / scale - top]
+  canvas.ds.offset = [
+    host.value.clientWidth / (2 * scale) - (left + right) / 2,
+    (80 + (host.value.clientHeight - 180 - (bottom - top) * scale) / 2) /
+      scale -
+      top
+  ]
   canvas.setDirty(true, true)
 }
 function draw(reset = false) {
@@ -322,17 +477,48 @@ function draw(reset = false) {
   renderedNodes.clear()
   const data = projection.value
   if (!data) return
-  const items = data.nodes.filter((item) => !imagesOnly.value || item.image)
+  nodeGroups.clear()
+  hubStages.clear()
+  const groups = resultGroups.value.filter(
+    (group) => !imagesOnly.value || group.files.some((f) => f.image)
+  )
+  const visibleGroups =
+    focusedStage.value === null
+      ? []
+      : groups
+          .filter((g) => g.stage === focusedStage.value)
+          .slice(focusedPage.value * 6, focusedPage.value * 6 + 6)
+  const items = visibleGroups.map((group) => {
+    nodeGroups.set(group.id, group)
+    return { ...group.preview, id: group.id, title: group.title }
+  })
+  for (let stage = 0; stage < 5; stage++) {
+    if (focusedStage.value !== null && stage !== focusedStage.value) continue
+    const id = `step:${stage}`
+    hubStages.set(id, stage)
+    items.push({
+      id,
+      title: `${stage + 1}. ${SCENE_STEP_NAMES[stage]}`,
+      stage,
+      kind: 'step',
+      sha256: '',
+      status: 'unknown',
+      error: null,
+      data: null,
+      text: null,
+      image: false
+    })
+  }
   const prepared = items.map((item) => {
     const jsonNode = isJsonCanvasNode(item)
-    const displayName = canvasNodeDisplayName(item.title, jsonNode)
+    const displayName = item.title
     let image = images.get(item.id)
     if (item.image && !image && !jsonNode) {
       image = new Image()
       image.onload = () => {
-        if (!disposed) draw(true)
+        if (!disposed) draw(false)
       }
-      image.src = fileUrl(item.id)
+      image.src = fileUrl(nodeGroups.get(item.id)?.preview.id || item.id)
       images.set(item.id, image)
     }
     const preview =
@@ -340,10 +526,18 @@ function draw(reset = false) {
     const imageScale = preview
       ? Math.min(1, 360 / preview.naturalWidth, 240 / preview.naturalHeight)
       : 0
-    const width = preview ? Math.round(preview.naturalWidth * imageScale) : 220
-    const height = preview
-      ? Math.round(preview.naturalHeight * imageScale)
-      : 220
+    const width =
+      item.kind === 'step'
+        ? 360
+        : preview
+          ? Math.round(preview.naturalWidth * imageScale)
+          : 220
+    const height =
+      item.kind === 'step'
+        ? 280
+        : preview
+          ? Math.round(preview.naturalHeight * imageScale)
+          : 220
     const titleFontSize = 24
     const titleMeasure = document.createElement('canvas').getContext('2d')
     if (titleMeasure) titleMeasure.font = `600 ${titleFontSize}px system-ui`
@@ -371,14 +565,22 @@ function draw(reset = false) {
       titleFontSize
     }
   })
-  const laneWidths = [0, 0, 0, 0, 0]
-  for (const entry of prepared)
-    laneWidths[entry.item.stage] = Math.max(
-      laneWidths[entry.item.stage],
-      entry.width
+  const positions = new Map<string, [number, number]>()
+  for (let stage = 0; stage < 5; stage++) {
+    const center: [number, number] =
+      focusedStage.value === null ? stageCenters[stage] : [0, 0]
+    positions.set(`step:${stage}`, center)
+    const children = prepared.filter(
+      (p) => p.item.stage === stage && p.item.kind !== 'step'
     )
-  laneWidth = Math.max(...laneWidths) + 50
-  const rowOffsets = [130, 130, 130, 130, 130]
+    const offsets = radialPositions(children)
+    children.forEach((entry, index) =>
+      positions.set(entry.item.id, [
+        center[0] + offsets[index][0],
+        center[1] + offsets[index][1]
+      ])
+    )
+  }
   for (const {
     item,
     image,
@@ -388,9 +590,9 @@ function draw(reset = false) {
     jsonNode,
     titleFontSize
   } of prepared) {
-    const node = new LGraphNode(canvasNodeDisplayName(item.title, jsonNode))
-    node.pos = [item.stage * laneWidth + 30, rowOffsets[item.stage]]
-    rowOffsets[item.stage] += height + 28
+    const node = new LGraphNode(item.title)
+    const position = positions.get(item.id) || [0, 0]
+    node.pos = [position[0] - width / 2, position[1] - height / 2]
     node.size = [width, height]
     node.color =
       item.status === 'unknown'
@@ -404,6 +606,56 @@ function draw(reset = false) {
     Object.defineProperty(node, 'title_mode', { value: LiteGraph.NO_TITLE })
     node.onDrawForeground = (ctx) => {
       ctx.save()
+      if (item.kind === 'step') {
+        ctx.fillStyle = '#203b4c'
+        ctx.beginPath()
+        ctx.roundRect(0, 0, width, height, 18)
+        ctx.fill()
+        ctx.fillStyle = '#edf6fb'
+        ctx.font = '600 28px system-ui'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'top'
+        ctx.fillText(item.title, width / 2, 20)
+        ctx.fillStyle = '#b0c9d9'
+        ctx.font = '16px system-ui'
+        ctx.fillText(SCENE_STEP_DESCRIPTIONS[item.stage], width / 2, 58)
+        const representative = resultGroups.value.find(
+          (g) => g.stage === item.stage && g.preview.image
+        )?.preview
+        if (representative) {
+          let thumb = images.get(representative.id)
+          if (!thumb) {
+            thumb = new Image()
+            thumb.onload = () => {
+              if (!disposed) canvas.setDirty(true, true)
+            }
+            thumb.src = fileUrl(representative.id)
+            images.set(representative.id, thumb)
+          }
+          if (thumb.complete && thumb.naturalWidth) {
+            const scale = Math.min(
+              300 / thumb.naturalWidth,
+              140 / thumb.naturalHeight
+            )
+            const w = thumb.naturalWidth * scale,
+              h = thumb.naturalHeight * scale
+            ctx.drawImage(thumb, (width - w) / 2, 88, w, h)
+          }
+        } else {
+          ctx.fillStyle = '#b0c9d9'
+          ctx.font = '18px system-ui'
+          ctx.fillText('展开查看记录和未决事项', width / 2, 145)
+        }
+        ctx.fillStyle = '#9fc9dd'
+        ctx.font = '17px system-ui'
+        ctx.fillText(
+          `${resultGroups.value.filter((g) => g.stage === item.stage).length} 组结果 · 点击展开`,
+          width / 2,
+          height - 30
+        )
+        ctx.restore()
+        return
+      }
       if (image && !jsonNode) {
         ctx.drawImage(image, 0, 0, width, height)
         const titleHeight = Math.min(
@@ -446,27 +698,13 @@ function draw(reset = false) {
             )
           )
       }
-      if (canvasSettings.value.showCapabilityBadges) {
-        const badgeScale = 1 / (canvas.ds.scale || 1)
-        const badgeWidth = 20 * badgeScale
-        const badgeHeight = 20 * badgeScale
-        const badgeX = width - canvasSettings.value.nodePadding - badgeWidth
-        const badgeY = canvasSettings.value.nodePadding
-        ctx.fillStyle = '#65713f'
-        ctx.beginPath()
-        ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 4 * badgeScale)
-        ctx.fill()
-        ctx.fillStyle = '#f4f7f8'
-        ctx.font = `700 ${10 * badgeScale}px system-ui`
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText('W', badgeX + badgeWidth / 2, badgeY + badgeHeight / 2)
-      }
       ctx.restore()
     }
     graph.add(node)
     nodePaths.set(node, item.id)
     renderedNodes.set(item.id, node)
+    for (const file of nodeGroups.get(item.id)?.files || [])
+      renderedNodes.set(file.id, node)
   }
   canvas.setDirty(true, true)
   if (reset) fit()
@@ -507,9 +745,66 @@ onMounted(async () => {
     ctx.lineTo(area[0] + area[2], 0)
     ctx.stroke()
     ctx.restore()
+    // These arrows explain the workflow, not verified file dependencies.
+    if (focusedStage.value === null) {
+      for (let stage = 0; stage < 4; stage++) {
+        const from = stageCenters[stage],
+          to = stageCenters[stage + 1]
+        const angle = Math.atan2(to[1] - from[1], to[0] - from[0])
+        const x1 = from[0] + Math.cos(angle) * 155,
+          y1 = from[1] + Math.sin(angle) * 155
+        const x2 = to[0] - Math.cos(angle) * 155,
+          y2 = to[1] - Math.sin(angle) * 155
+        ctx.save()
+        ctx.strokeStyle = '#82b9d8'
+        ctx.fillStyle = '#b8d7e8'
+        ctx.lineWidth = 3
+        ctx.beginPath()
+        ctx.moveTo(x1, y1)
+        ctx.lineTo(x2, y2)
+        ctx.stroke()
+        ctx.save()
+        ctx.translate(x2, y2)
+        ctx.rotate(angle)
+        ctx.beginPath()
+        ctx.moveTo(0, 0)
+        ctx.lineTo(-14, -7)
+        ctx.lineTo(-14, 7)
+        ctx.closePath()
+        ctx.fill()
+        ctx.restore()
+        ctx.font = '18px system-ui'
+        ctx.textAlign = 'center'
+        ctx.fillText(stepLinks[stage], (x1 + x2) / 2, (y1 + y2) / 2 - 14)
+        ctx.restore()
+      }
+    }
+    // Each result belongs to one step. Neutral spokes express membership.
+    for (const [id, group] of nodeGroups) {
+      const hub = renderedNodes.get(`step:${group.stage}`),
+        child = renderedNodes.get(id)
+      if (!hub || !child) continue
+      ctx.save()
+      ctx.strokeStyle = '#66809766'
+      ctx.lineWidth = 2
+      ctx.setLineDash([5, 7])
+      ctx.beginPath()
+      ctx.moveTo(hub.pos[0] + hub.size[0] / 2, hub.pos[1] + hub.size[1] / 2)
+      ctx.lineTo(
+        child.pos[0] + child.size[0] / 2,
+        child.pos[1] + child.size[1] / 2
+      )
+      ctx.stroke()
+      ctx.restore()
+    }
     for (const edge of projection.value?.edges || []) {
       const from = renderedNodes.get(edge.from),
         to = renderedNodes.get(edge.to)
+      const activeFiles = new Set(
+        selectedGroup.value?.files.map((f) => f.id) ||
+          (selected.value ? [selected.value.id] : [])
+      )
+      if (!activeFiles.has(edge.from) && !activeFiles.has(edge.to)) continue
       if (!from || !to || from === to) continue
       const x1 = from.pos[0] + from.size[0],
         y1 = from.pos[1] + from.size[1] / 2,
@@ -549,11 +844,6 @@ onMounted(async () => {
       }
       ctx.restore()
     }
-    ctx.fillStyle = '#b7cde0'
-    ctx.font = 'bold 22px sans-serif'
-    projection.value?.stages.forEach((stage, index) =>
-      ctx.fillText(stage, 30 + index * laneWidth, 85)
-    )
   }
   element.value!.addEventListener(
     'contextmenu',
@@ -634,6 +924,19 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.scene-guide {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  max-width: 65vw;
+  padding: 10px 14px;
+  background: #162834ee;
+  color: #b8d7e8;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.7;
+  pointer-events: none;
+}
 .scene-workspace {
   position: fixed;
   inset: 0;

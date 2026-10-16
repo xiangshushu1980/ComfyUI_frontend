@@ -902,8 +902,14 @@ import CanvasSettingsPanel from './CanvasSettingsPanel.vue'
 import NativeWorkflow from './NativeWorkflow.vue'
 import { requestId, studioApi } from './api'
 import { CANVAS_NODE_COLORS, CANVAS_NODE_RADIUS } from './canvasNodeStyle'
-import { canvasSettingsStorageKey, DEFAULT_CANVAS_SETTINGS, inspectorWidthStorageKey, normalizeCanvasSettings } from './canvasSettings';
-import type { CanvasSettings } from './canvasSettings';
+import { canvasNodeDisplayName, isJsonCanvasNode } from './canvasNodeName'
+import {
+  canvasSettingsStorageKey,
+  DEFAULT_CANVAS_SETTINGS,
+  inspectorWidthStorageKey,
+  normalizeCanvasSettings
+} from './canvasSettings'
+import type { CanvasSettings } from './canvasSettings'
 import {
   canDrill,
   hitCanvasNode,
@@ -3263,6 +3269,9 @@ function projectGraph() {
       assetId: string
       titleLines: string[]
       bodyLines: string[]
+      jsonNode: boolean
+      titleFontSize: number
+      hasMediaPreview: boolean
     }
   >(
     visible.map((object) => {
@@ -3290,7 +3299,7 @@ function projectGraph() {
       const branchId = conceptBrief
         ? conceptBranchId(conceptBrief)
         : object.conceptId
-      const title =
+      const rawTitle =
         branchId && object.role === 'concept_brief'
           ? `概念图 ${branchId} · 设计说明`
           : branchId && object.role === 'concept_prompt'
@@ -3299,6 +3308,8 @@ function projectGraph() {
                 (object.role === 'concept' || object.stage === 'concept')
               ? `概念图 ${branchId} · ${object.kind === 'workflow_run' ? '生成' : '候选图'}`
               : object.name || kindName(object.kind)
+      const jsonNode = isJsonCanvasNode(object)
+      const title = canvasNodeDisplayName(rawTitle, jsonNode)
       const entityResource = entityPreviewAssets.get(object.id)
       const assetId =
         entityResource?.assetId ||
@@ -3312,100 +3323,40 @@ function projectGraph() {
         assetId && (object.kind === 'entity' || object.type === 'image')
       )
       const previewScale =
-        assetId && (isImage || object.type === 'video')
-          ? Math.min(
-              1,
-              (isImage ? 360 : 640) / sourceWidth,
-              (isImage ? 240 : 480) / sourceHeight
-            )
+        assetId && isImage
+          ? Math.min(1, 360 / sourceWidth, 240 / sourceHeight)
           : 0
       const previewWidth = Math.round(sourceWidth * previewScale)
       const previewHeight = Math.round(sourceHeight * previewScale)
       const entityTile = object.kind === 'entity' && !assetId
-      const imageOnly = Boolean(isImage)
-      const bodyText = entityTile ? '' : nodePreview(object)
-      const preferredWidth = Math.max(
-        190,
-        Math.min(
-          276,
-          Math.ceil(
-            Math.max(
-              titleMeasure?.measureText(title).width || 0,
-              titleMeasure?.measureText(bodyText.slice(0, 28)).width || 0
-            )
-          )
-        )
-      )
-      const textWidth = entityTile
-        ? Math.max(
-            156,
-            Math.min(
-              236,
-              Math.ceil(titleMeasure?.measureText(title).width || 140)
-            )
-          )
-        : preferredWidth
+      const imageOnly = Boolean(isImage && !jsonNode)
+      const hasMediaPreview = imageOnly
+      const nodeWidth = 220
+      const nodeHeight = 220
+      const titleFontSize = jsonNode ? 24 : 22
+      const textWidth = imageOnly ? previewWidth : nodeWidth - nodePadding() * 4
       const titleLines = wrapText(
         title,
-        entityTile ? 180 : textWidth,
-        '600 13px system-ui'
+        imageOnly ? Math.max(textWidth, 1) : textWidth,
+        `600 ${titleFontSize}px system-ui`
       )
-      const wrappedBodyLines = wrapText(bodyText, textWidth, '12px system-ui')
-      const bodyLineLimit = 2
-      const bodyLines =
-        wrappedBodyLines.length > bodyLineLimit
-          ? [
-              ...wrappedBodyLines.slice(0, bodyLineLimit - 1),
-              `${wrappedBodyLines[bodyLineLimit - 1].trimEnd()}…`
-            ]
-          : wrappedBodyLines
-      const activityLines = object.agentActivity
-        ? wrapText(object.agentActivity, textWidth, '12px system-ui')
-        : []
-      const square =
-        entityTile ||
-        (!imageOnly &&
-          !bodyLines.length &&
-          !activityLines.length &&
-          object.type !== 'video')
-      const squareSize = Math.max(
-        160,
-        Math.min(
-          260,
-          Math.max(textWidth, titleLines.length * 17 + nodePadding() * 2)
-        )
-      )
-      const textHeight =
-        16 +
-        titleLines.length * 16 +
-        (activityLines.length ? 3 + activityLines.length * 15 : 0) +
-        (bodyLines.length ? 3 + bodyLines.length * 15 : 0) +
-        10
+      const bodyLines: string[] = []
       return [
         object.id,
         {
-          width: imageOnly
-            ? previewWidth
-            : square
-              ? squareSize
-              : Math.max(textWidth, previewWidth),
-          height: imageOnly
-            ? previewHeight
-            : square
-              ? squareSize
-              : Math.max(
-                  textHeight +
-                    (object.type === 'video' ? previewHeight + 8 : 0),
-                  previewHeight + 48
-                ),
+          width: imageOnly ? previewWidth : nodeWidth,
+          height: imageOnly ? previewHeight : nodeHeight,
           previewWidth,
           previewHeight,
           imageOnly,
           entityTile,
-          square,
+          square: !imageOnly,
           assetId,
           titleLines,
-          bodyLines
+          bodyLines,
+          jsonNode,
+          titleFontSize,
+          hasMediaPreview
         }
       ]
     })
@@ -3598,7 +3549,7 @@ function projectGraph() {
     // LiteGraph expands nodes to fit their native title when slots are added.
     // Titles are rendered by this view, so restore the measured canvas size.
     n.size = [dimensions.width, dimensions.height]
-    if (dimensions.assetId && (dimensions.imageOnly || o.type === 'video')) {
+    if (dimensions.assetId && dimensions.hasMediaPreview) {
       let image = images.get(dimensions.assetId)
       if (!image) {
         image = new Image()
@@ -3615,11 +3566,7 @@ function projectGraph() {
             dimensions.imageOnly
               ? 0
               : (n.size[0] - dimensions.previewWidth) / 2,
-            dimensions.imageOnly
-              ? 0
-              : nodePadding() +
-                  dimensions.titleLines.length * 17 +
-                  nodePadding(),
+            dimensions.imageOnly ? 0 : 16,
             dimensions.previewWidth,
             dimensions.previewHeight
           )
@@ -3627,176 +3574,71 @@ function projectGraph() {
       }
     }
     n.onDrawForeground = (ctx) => {
-      ctx.save()
       if (invalidGlowId.value === o.id) {
+        ctx.save()
         ctx.shadowColor = '#ff5b50'
         ctx.shadowBlur = 22
         ctx.strokeStyle = '#ff9a75'
         ctx.lineWidth = 3 / canvas.ds.scale
         ctx.strokeRect(2, 2, n.size[0] - 4, n.size[1] - 4)
+        ctx.restore()
       }
-      ctx.restore()
       if (dimensions.imageOnly) {
-        ctx.save()
-        const imageTypeLabel =
-          o.role === 'reference'
-            ? '参考图'
-            : ['threeview', 'threeview_current'].includes(o.role || '')
-              ? '三视图'
-              : ['concept', 'appearance_candidate'].includes(o.role || '')
-                ? '概念图'
-                : ''
-        if (imageTypeLabel && !String(o.name || '').includes(imageTypeLabel)) {
-          const badgeScale = 1 / canvas.ds.scale
-          ctx.font = `600 ${13 * badgeScale}px system-ui`
-          const badgeWidth =
-            ctx.measureText(imageTypeLabel).width + 20 * badgeScale
-          const badgeHeight = 28 * badgeScale
-          const badgeX = (n.size[0] - badgeWidth) / 2
-          const badgeY = (n.size[1] - badgeHeight) / 2
-          ctx.fillStyle = CANVAS_NODE_COLORS.titleBar
-          ctx.beginPath()
-          ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 7 * badgeScale)
-          ctx.fill()
-          ctx.fillStyle = '#f1f5f7'
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(imageTypeLabel, n.size[0] / 2, n.size[1] / 2)
-        }
-        if (o.kind === 'entity' && o.flags?.includes('ai-created')) {
-          ctx.font = `600 ${11 / canvas.ds.scale}px system-ui`
-          ctx.fillStyle = '#f0bd4d'
-          ctx.textAlign = 'left'
-          ctx.textBaseline = 'top'
-          ctx.fillText('AI 创建', nodePadding(), nodePadding())
-        }
+        const titleHeight = Math.min(
+          54,
+          Math.max(30, dimensions.titleLines.length * 18 + 8)
+        )
+        ctx.fillStyle = CANVAS_NODE_COLORS.titleBar
+        ctx.fillRect(0, n.size[1] - titleHeight, n.size[0], titleHeight)
+        ctx.font = `600 ${dimensions.titleFontSize}px system-ui`
+        ctx.fillStyle = CANVAS_NODE_COLORS.text
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'top'
+        dimensions.titleLines
+          .slice(0, 2)
+          .forEach((line, index) =>
+            ctx.fillText(
+              line,
+              n.size[0] / 2,
+              n.size[1] - titleHeight + 4 + index * 20,
+              n.size[0] - 12
+            )
+          )
         if (o.role === 'appearance_current') {
           ctx.strokeStyle = '#f0bd4d'
           ctx.lineWidth = 4 / canvas.ds.scale
           ctx.strokeRect(2, 2, n.size[0] - 4, n.size[1] - 4)
-          const badgeScale = 1 / canvas.ds.scale
-          ctx.font = `600 ${12 * badgeScale}px system-ui`
-          const badgeWidth = ctx.measureText('主形象').width + 16 * badgeScale
-          const badgeHeight = 24 * badgeScale
-          const badgeX = 8 * badgeScale
-          const badgeY = 8 * badgeScale
-          ctx.fillStyle = '#f0bd4d'
-          ctx.beginPath()
-          ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 5 * badgeScale)
-          ctx.fill()
-          ctx.fillStyle = '#18232b'
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(
-            '主形象',
-            badgeX + badgeWidth / 2,
-            badgeY + badgeHeight / 2
-          )
-        }
-        drawCapabilityBadges(ctx, o, n.size[0])
-        const labelLines = wrapText(
-          o.name || '图片',
-          n.size[0] - nodePadding() * 2,
-          '12px system-ui'
-        )
-        const labelHeight = Math.max(24, labelLines.length * 15 + 8)
-        ctx.font = '12px system-ui'
-        const labelWidth = Math.min(
-          n.size[0],
-          Math.max(
-            ...labelLines.map((line) => ctx.measureText(line).width),
-            0
-          ) +
-            nodePadding() * 2
-        )
-        const labelX = (n.size[0] - labelWidth) / 2
-        const labelY = n.size[1] - labelHeight
-        ctx.fillStyle = CANVAS_NODE_COLORS.titleBar
-        ctx.fillRect(labelX, labelY, labelWidth, labelHeight)
-        ctx.fillStyle = CANVAS_NODE_COLORS.text
-        ctx.textBaseline = 'top'
-        ctx.textAlign = 'center'
-        labelLines.forEach((line, index) =>
-          ctx.fillText(line, n.size[0] / 2, labelY + nodePadding() + index * 15)
-        )
-        ctx.restore()
-        return
-      }
-      if (dimensions.entityTile) {
-        ctx.fillStyle = '#245853'
-        ctx.beginPath()
-        ctx.roundRect(0, 0, n.size[0], n.size[1], 7)
-        ctx.fill()
-        ctx.font = '600 13px system-ui'
-        ctx.fillStyle = '#f1f5f7'
-        ctx.textBaseline = 'top'
-        const titleHeight = dimensions.titleLines.length * 17
-        dimensions.titleLines.forEach((line, index) => {
-          const lineWidth = ctx.measureText(line).width
-          ctx.fillText(
-            line,
-            (n.size[0] - lineWidth) / 2,
-            (n.size[1] - titleHeight) / 2 + index * 17
-          )
-        })
-        if (o.flags?.includes('ai-created')) {
-          ctx.font = '600 11px system-ui'
-          ctx.fillStyle = '#f0bd4d'
-          ctx.textAlign = 'left'
-          ctx.fillText('AI 创建', nodePadding(), nodePadding())
         }
         drawCapabilityBadges(ctx, o, n.size[0])
         return
       }
-      ctx.save()
-      ctx.fillStyle = CANVAS_NODE_COLORS.background
+      ctx.fillStyle = dimensions.entityTile
+        ? '#245853'
+        : CANVAS_NODE_COLORS.background
       ctx.beginPath()
       ctx.roundRect(0, 0, n.size[0], n.size[1], CANVAS_NODE_RADIUS)
       ctx.fill()
-      ctx.textBaseline = 'top'
-      ctx.font = '600 13px system-ui'
+      ctx.font = `600 ${dimensions.titleFontSize}px system-ui`
       ctx.fillStyle = CANVAS_NODE_COLORS.text
       ctx.textAlign = 'center'
-      const titleY = dimensions.square
-        ? (n.size[1] - dimensions.titleLines.length * 17) / 2
-        : nodePadding()
+      ctx.textBaseline = 'top'
+      const lineHeight = dimensions.titleFontSize + 5
+      const blockHeight = dimensions.titleLines.length * lineHeight
+      const startY = Math.max(nodePadding(), (n.size[1] - blockHeight) / 2)
       dimensions.titleLines.forEach((line, index) =>
         ctx.fillText(
           line,
           n.size[0] / 2,
-          titleY + index * 17,
+          startY + index * lineHeight,
           n.size[0] - nodePadding() * 2
         )
       )
-      let textY =
-        nodePadding() + dimensions.titleLines.length * 17 + nodePadding()
-      if (o.agentActivity) {
-        ctx.font = '12px system-ui'
-        ctx.fillStyle = '#8fd1ae'
+      if (o.flags?.includes('ai-created')) {
+        ctx.font = '600 11px system-ui'
+        ctx.fillStyle = '#f0bd4d'
         ctx.textAlign = 'left'
-        const activityLines = wrapText(
-          `◉ ${o.agentActivity}`,
-          n.size[0] - nodePadding() * 2,
-          '12px system-ui'
-        )
-        activityLines.forEach((line, index) =>
-          ctx.fillText(
-            line,
-            nodePadding(),
-            textY + index * 16,
-            n.size[0] - nodePadding() * 2
-          )
-        )
-        textY += activityLines.length * 16 + 5
+        ctx.fillText('AI 创建', nodePadding(), nodePadding())
       }
-      if (o.type === 'video') textY += dimensions.previewHeight + 8
-      ctx.font = '12px system-ui'
-      ctx.fillStyle = '#d4e0e6'
-      ctx.textAlign = 'left'
-      dimensions.bodyLines.forEach((line, index) =>
-        ctx.fillText(line, 0, textY + index * 16, n.size[0])
-      )
-      ctx.restore()
       drawCapabilityBadges(ctx, o, n.size[0])
     }
     graph.add(n)

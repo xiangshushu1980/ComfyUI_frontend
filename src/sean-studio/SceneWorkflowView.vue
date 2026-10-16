@@ -132,8 +132,14 @@ import {
 import CanvasToolbar from './CanvasToolbar.vue'
 import CanvasSettingsPanel from './CanvasSettingsPanel.vue'
 import { CANVAS_NODE_COLORS, CANVAS_NODE_RADIUS } from './canvasNodeStyle'
-import { canvasSettingsStorageKey, DEFAULT_CANVAS_SETTINGS, inspectorWidthStorageKey, normalizeCanvasSettings } from './canvasSettings';
-import type { CanvasSettings } from './canvasSettings';
+import { canvasNodeDisplayName, isJsonCanvasNode } from './canvasNodeName'
+import {
+  canvasSettingsStorageKey,
+  DEFAULT_CANVAS_SETTINGS,
+  inspectorWidthStorageKey,
+  normalizeCanvasSettings
+} from './canvasSettings'
+import type { CanvasSettings } from './canvasSettings'
 
 type Artifact = {
   id: string
@@ -318,8 +324,10 @@ function draw(reset = false) {
   if (!data) return
   const items = data.nodes.filter((item) => !imagesOnly.value || item.image)
   const prepared = items.map((item) => {
+    const jsonNode = isJsonCanvasNode(item)
+    const displayName = canvasNodeDisplayName(item.title, jsonNode)
     let image = images.get(item.id)
-    if (item.image && !image) {
+    if (item.image && !image && !jsonNode) {
       image = new Image()
       image.onload = () => {
         if (!disposed) draw(true)
@@ -327,41 +335,41 @@ function draw(reset = false) {
       image.src = fileUrl(item.id)
       images.set(item.id, image)
     }
-    const preview = image?.complete && image.naturalWidth ? image : undefined
-    const scale = preview
+    const preview =
+      !jsonNode && image?.complete && image.naturalWidth ? image : undefined
+    const imageScale = preview
       ? Math.min(1, 360 / preview.naturalWidth, 240 / preview.naturalHeight)
       : 0
-    const width = preview
-      ? Math.max(1, Math.round(preview.naturalWidth * scale))
-      : Math.max(190, Math.min(320, Array.from(item.title).length * 13 + 32))
-    const charsPerTitleLine = Math.max(10, Math.floor((width - 32) / 13))
-    const titleChars = Array.from(item.title)
-    const titleLines = Array.from(
-      { length: Math.ceil(titleChars.length / charsPerTitleLine) },
-      (_, index) =>
-        titleChars
-          .slice(index * charsPerTitleLine, (index + 1) * charsPerTitleLine)
-          .join('')
-    )
-    const rawPreview = String(
-      item.error || item.text || JSON.stringify(item.data) || ''
-    )
-      .replace(/\s+/g, ' ')
-      .trim()
-    const previewLines = rawPreview
-      ? Array.from({ length: 2 }, (_, index) =>
-          Array.from(rawPreview)
-            .slice(index * 32, (index + 1) * 32)
-            .join('')
-        ).filter(Boolean)
-      : []
+    const width = preview ? Math.round(preview.naturalWidth * imageScale) : 220
     const height = preview
-      ? Math.max(1, Math.round(preview.naturalHeight * scale))
-      : Math.max(
-          previewLines.length ? 88 : 180,
-          titleLines.length * 17 + 32 + previewLines.length * 16
-        )
-    return { item, image: preview, width, height, previewLines, titleLines }
+      ? Math.round(preview.naturalHeight * imageScale)
+      : 220
+    const titleFontSize = 24
+    const titleMeasure = document.createElement('canvas').getContext('2d')
+    if (titleMeasure) titleMeasure.font = `600 ${titleFontSize}px system-ui`
+    const titleLines: string[] = []
+    let line = ''
+    for (const character of Array.from(displayName)) {
+      const next = line + character
+      if (
+        line &&
+        titleMeasure &&
+        titleMeasure.measureText(next).width > width - 24
+      ) {
+        titleLines.push(line)
+        line = character.trimStart()
+      } else line = next
+    }
+    if (line) titleLines.push(line)
+    return {
+      item,
+      image: preview,
+      width,
+      height,
+      titleLines,
+      jsonNode,
+      titleFontSize
+    }
   })
   const laneWidths = [0, 0, 0, 0, 0]
   for (const entry of prepared)
@@ -376,10 +384,11 @@ function draw(reset = false) {
     image,
     width,
     height,
-    previewLines,
-    titleLines
+    titleLines,
+    jsonNode,
+    titleFontSize
   } of prepared) {
-    const node = new LGraphNode(item.title)
+    const node = new LGraphNode(canvasNodeDisplayName(item.title, jsonNode))
     node.pos = [item.stage * laneWidth + 30, rowOffsets[item.stage]]
     rowOffsets[item.stage] += height + 28
     node.size = [width, height]
@@ -395,20 +404,23 @@ function draw(reset = false) {
     Object.defineProperty(node, 'title_mode', { value: LiteGraph.NO_TITLE })
     node.onDrawForeground = (ctx) => {
       ctx.save()
-      if (image) {
+      if (image && !jsonNode) {
         ctx.drawImage(image, 0, 0, width, height)
-        const titleHeight = Math.max(30, titleLines.length * 15 + 8)
+        const titleHeight = Math.min(
+          60,
+          Math.max(34, titleLines.length * 26 + 8)
+        )
         ctx.fillStyle = CANVAS_NODE_COLORS.titleBar
         ctx.fillRect(0, height - titleHeight, width, titleHeight)
         ctx.fillStyle = CANVAS_NODE_COLORS.text
-        ctx.font = '600 12px system-ui'
+        ctx.font = '600 18px system-ui'
         ctx.textAlign = 'center'
         ctx.textBaseline = 'top'
         titleLines.forEach((line, index) =>
           ctx.fillText(
             line,
             width / 2,
-            height - titleHeight + 4 + index * 15,
+            height - titleHeight + 4 + index * 22,
             width - canvasSettings.value.nodePadding * 2
           )
         )
@@ -418,33 +430,21 @@ function draw(reset = false) {
         ctx.roundRect(0, 0, width, height, CANVAS_NODE_RADIUS)
         ctx.fill()
         ctx.fillStyle = CANVAS_NODE_COLORS.text
-        ctx.font = '600 13px system-ui'
+        ctx.font = `600 ${titleFontSize}px system-ui`
         ctx.textAlign = 'center'
         ctx.textBaseline = 'top'
-        titleLines.forEach((line, index) =>
-          ctx.fillText(
-            line,
-            width / 2,
-            previewLines.length
-              ? 16 + index * 17
-              : (height - titleLines.length * 17) / 2 + index * 17,
-            width - canvasSettings.value.nodePadding * 2
-          )
-        )
-        if (previewLines.length) {
-          ctx.font = '12px system-ui'
-          ctx.fillStyle = CANVAS_NODE_COLORS.body
-          ctx.textAlign = 'left'
-          ctx.textBaseline = 'top'
-          previewLines.forEach((line, index) =>
+        titleLines
+          .slice(0, 6)
+          .forEach((line, index) =>
             ctx.fillText(
               line,
-              canvasSettings.value.nodePadding,
-              16 + titleLines.length * 17 + 8 + index * 16,
+              width / 2,
+              (height - Math.min(titleLines.length, 6) * (titleFontSize + 3)) /
+                2 +
+                index * (titleFontSize + 3),
               width - canvasSettings.value.nodePadding * 2
             )
           )
-        }
       }
       if (canvasSettings.value.showCapabilityBadges) {
         const badgeScale = 1 / (canvas.ds.scale || 1)

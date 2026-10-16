@@ -2,7 +2,11 @@
 <template>
   <div class="workspace">
     <div class="floating-brand">
-      <a href="/src/sean-studio/scene.html" style="color: #9fd5ff">3D 场景</a>
+      <a
+        :href="`src/sean-studio/scene.html?project=${encodeURIComponent(projectId)}`"
+        style="color: #9fd5ff"
+        >3D 场景</a
+      >
       <button
         type="button"
         class="project-menu-trigger"
@@ -28,8 +32,8 @@
       </div>
     </div>
     <main>
-      <nav class="canvas-navigation" aria-label="画布导航">
-        <div class="navigation-location">
+      <CanvasToolbar aria-label="画布导航">
+        <template #location>
           <div v-if="canvasMode === 'agents'" class="breadcrumbs">
             <button type="button" @click="toggleCanvasMode">创作图谱</button>
             <span>/</span><span>Agent 运行监控</span>
@@ -62,33 +66,31 @@
               </button>
             </template>
           </div>
-        </div>
-        <div class="canvas-actions">
-          <button
-            v-if="canvasMode === 'agents'"
-            :disabled="navigationBusy || !projectId"
-            @click="syncPiProject"
-          >
-            {{ navigationBusy ? '同步中…' : '同步 PiWeb' }}
-          </button>
-          <button @click="toggleCanvasMode">
-            {{ canvasMode === 'agents' ? '返回创作图谱' : 'Agent 运行监控' }}
-          </button>
-          <button
-            v-if="canvasMode === 'story'"
-            @click="showAllResources = !showAllResources"
-          >
-            {{ showAllResources ? '收起次要素材' : '展开全部素材' }}
-          </button>
-          <button @click="fit">适配画布</button>
-          <button
-            :aria-expanded="settingsOpen"
-            @click="settingsOpen = !settingsOpen"
-          >
-            设置
-          </button>
-        </div>
-      </nav>
+        </template>
+        <button
+          v-if="canvasMode === 'agents'"
+          :disabled="navigationBusy || !projectId"
+          @click="syncPiProject"
+        >
+          {{ navigationBusy ? '同步中…' : '同步 PiWeb' }}
+        </button>
+        <button @click="toggleCanvasMode">
+          {{ canvasMode === 'agents' ? '返回创作图谱' : 'Agent 运行监控' }}
+        </button>
+        <button
+          v-if="canvasMode === 'story'"
+          @click="showAllResources = !showAllResources"
+        >
+          {{ showAllResources ? '收起次要素材' : '展开全部素材' }}
+        </button>
+        <button @click="fit">适配画布</button>
+        <button
+          :aria-expanded="settingsOpen"
+          @click="settingsOpen = !settingsOpen"
+        >
+          设置
+        </button>
+      </CanvasToolbar>
       <div v-if="canvasMode === 'agents' && syncMessage" class="sync-message">
         {{ syncMessage }}
       </div>
@@ -101,109 +103,14 @@
           @change="uploadReference"
         />
         <canvas ref="canvasElement" />
-        <div
+        <CanvasSettingsPanel
           v-if="settingsOpen"
-          class="canvas-settings"
-          role="region"
-          aria-label="画布设置"
-          @pointerdown.stop
-        >
-          <header>
-            <strong>画布设置</strong>
-            <button aria-label="关闭设置" @click="settingsOpen = false">
-              ×
-            </button>
-          </header>
-          <label>
-            节点内边距
-            <input
-              v-model.number="canvasSettings.nodePadding"
-              type="range"
-              min="4"
-              max="20"
-              step="1"
-              @input="applyCanvasSettings"
-            />
-            <span>{{ canvasSettings.nodePadding }} px</span>
-          </label>
-          <label class="settings-toggle">
-            Agent / Workflow 标记
-            <input
-              v-model="canvasSettings.showCapabilityBadges"
-              type="checkbox"
-              @change="applyCanvasSettings"
-            />
-            <span>{{
-              canvasSettings.showCapabilityBadges ? '显示' : '隐藏'
-            }}</span>
-          </label>
-          <label>
-            连线样式
-            <select
-              v-model="canvasSettings.linkStyle"
-              @change="applyCanvasSettings"
-            >
-              <option value="spline">曲线</option>
-              <option value="linear">直角折线</option>
-              <option value="straight">直线</option>
-            </select>
-          </label>
-          <label>
-            连线中点
-            <select
-              v-model="canvasSettings.linkMarker"
-              @change="applyCanvasSettings"
-            >
-              <option value="circle">圆点（点击打开连线菜单）</option>
-              <option value="arrow">方向箭头</option>
-              <option value="none">隐藏</option>
-            </select>
-          </label>
-          <label>
-            连线颜色
-            <input
-              v-model="canvasSettings.linkColor"
-              type="color"
-              @input="applyCanvasSettings"
-            />
-          </label>
-          <label>
-            连线宽度
-            <input
-              v-model.number="canvasSettings.linkWidth"
-              type="range"
-              min="1"
-              max="12"
-              step="0.5"
-              @input="applyCanvasSettings"
-            />
-            <span>{{ canvasSettings.linkWidth }} px</span>
-          </label>
-          <label>
-            属性面板透明度
-            <input
-              v-model.number="canvasSettings.panelOpacity"
-              type="range"
-              min="0.35"
-              max="1"
-              step="0.05"
-              @input="applyCanvasSettings"
-            />
-            <span>{{ Math.round(canvasSettings.panelOpacity * 100) }}%</span>
-          </label>
-          <label>
-            属性面板宽度
-            <input
-              v-model.number="inspectorWidth"
-              type="range"
-              min="360"
-              max="1200"
-              step="20"
-              @input="saveInspectorWidth"
-            />
-            <span>{{ inspectorWidth }} px</span>
-          </label>
-        </div>
+          v-model="canvasSettings"
+          v-model:inspector-width="inspectorWidth"
+          @change="applyCanvasSettings"
+          @width-change="saveInspectorWidth"
+          @close="settingsOpen = false"
+        />
         <div
           v-if="mediaPreview"
           class="media-preview"
@@ -990,9 +897,13 @@ import {
 } from '@/lib/litegraph/src/types/globalEnums'
 import type { Rect } from '@/lib/litegraph/src/interfaces'
 import { toNodeId } from '@/types/nodeId'
+import CanvasToolbar from './CanvasToolbar.vue'
+import CanvasSettingsPanel from './CanvasSettingsPanel.vue'
 import NativeWorkflow from './NativeWorkflow.vue'
 import { requestId, studioApi } from './api'
 import { CANVAS_NODE_COLORS, CANVAS_NODE_RADIUS } from './canvasNodeStyle'
+import { canvasSettingsStorageKey, DEFAULT_CANVAS_SETTINGS, inspectorWidthStorageKey, normalizeCanvasSettings } from './canvasSettings';
+import type { CanvasSettings } from './canvasSettings';
 import {
   canDrill,
   hitCanvasNode,
@@ -1121,16 +1032,7 @@ const inspectorElement = ref<HTMLElement | null>(null)
 const inspectorWidth = ref(520)
 const mediaPreview = ref<Obj | null>(null)
 const settingsOpen = ref(false)
-const defaultCanvasSettings = {
-  nodePadding: 4,
-  showCapabilityBadges: true,
-  linkStyle: 'spline' as 'spline' | 'linear' | 'straight',
-  linkMarker: 'circle' as 'circle' | 'arrow' | 'none',
-  linkColor: '#9A9',
-  linkWidth: 3,
-  panelOpacity: 0.94
-}
-const canvasSettings = ref({ ...defaultCanvasSettings })
+const canvasSettings = ref<CanvasSettings>({ ...DEFAULT_CANVAS_SETTINGS })
 const activeWorkflowId = ref(''),
   workflowTargets = ref<Record<string, string>>({}),
   workflowContexts = ref<Record<string, string>>({}),
@@ -1894,10 +1796,10 @@ function viewKey() {
   )
 }
 function inspectorWidthKey() {
-  return `sean-studio-inspector-width:${projectId.value}`
+  return inspectorWidthStorageKey(projectId.value)
 }
 function canvasSettingsKey() {
-  return `sean-studio-canvas-settings:${projectId.value}`
+  return canvasSettingsStorageKey(projectId.value)
 }
 function nodePadding() {
   return canvasSettings.value.nodePadding
@@ -1969,31 +1871,9 @@ function drawCapabilityBadges(
 function loadCanvasSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(canvasSettingsKey()) || '{}')
-    canvasSettings.value = {
-      ...defaultCanvasSettings,
-      ...saved,
-      nodePadding: Number.isFinite(saved.nodePadding)
-        ? Math.min(20, Math.max(4, saved.nodePadding))
-        : 4,
-      showCapabilityBadges: saved.showCapabilityBadges !== false,
-      linkStyle: ['spline', 'linear', 'straight'].includes(saved.linkStyle)
-        ? saved.linkStyle
-        : 'spline',
-      linkColor: /^#[0-9a-f]{6}$/i.test(saved.linkColor || '')
-        ? saved.linkColor
-        : '#9A9',
-      linkWidth: Number.isFinite(saved.linkWidth)
-        ? Math.min(12, Math.max(1, saved.linkWidth))
-        : 3,
-      linkMarker: ['circle', 'arrow', 'none'].includes(saved.linkMarker)
-        ? saved.linkMarker
-        : 'circle',
-      panelOpacity: Number.isFinite(saved.panelOpacity)
-        ? Math.min(1, Math.max(0.35, saved.panelOpacity))
-        : 0.94
-    }
+    canvasSettings.value = normalizeCanvasSettings(saved)
   } catch {
-    canvasSettings.value = { ...defaultCanvasSettings }
+    canvasSettings.value = { ...DEFAULT_CANVAS_SETTINGS }
   }
   applyCanvasSettings()
 }
@@ -4630,99 +4510,9 @@ main {
   min-width: 0;
   min-height: 0;
 }
-nav {
-  position: absolute;
-  z-index: 12;
-  top: 10px;
-  right: 10px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: calc(100vw - 70px);
-  padding: 4px;
-  border: 1px solid #344b5bcc;
-  border-radius: 10px;
-  background: rgb(20 34 46 / 90%);
-  box-shadow: 0 5px 18px rgb(0 0 0 / 24%);
-  backdrop-filter: blur(10px);
-}
-nav.canvas-navigation {
-  height: auto;
-  min-height: 0;
-  flex-wrap: nowrap;
-  padding-left: 4px;
-  padding-right: 4px;
-}
-.canvas-navigation {
-  width: fit-content;
-}
-.navigation-location {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: min(42vw, 520px);
-  margin-right: 0;
-}
 .agent-view-heading {
   color: var(--muted);
   font-size: 12px;
-}
-.canvas-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 5px;
-  margin-left: 0;
-  margin-right: 0;
-}
-.canvas-actions button {
-  padding: 6px 9px;
-  white-space: nowrap;
-}
-.canvas-settings {
-  position: absolute;
-  z-index: 30;
-  top: 60px;
-  right: 12px;
-  display: grid;
-  gap: 12px;
-  width: min(300px, calc(100vw - 24px));
-  padding: 14px;
-  border: 1px solid #435c6c;
-  border-radius: 10px;
-  background: #162834f5;
-  box-shadow: 0 14px 36px #0009;
-}
-.canvas-settings header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.canvas-settings header button {
-  padding: 2px 8px;
-}
-.canvas-settings label {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 5px 12px;
-  color: #c3d1da;
-  font-size: 12px;
-}
-.canvas-settings label > input,
-.canvas-settings label > select {
-  grid-column: 1 / -1;
-  width: 100%;
-  margin: 0;
-}
-.canvas-settings label > input[type='color'] {
-  height: 34px;
-  padding: 3px;
-}
-.canvas-settings label.settings-toggle {
-  display: flex;
-  justify-content: space-between;
-}
-.canvas-settings label.settings-toggle > input[type='checkbox'] {
-  width: auto;
 }
 .sync-message {
   position: absolute;
@@ -5147,24 +4937,6 @@ nav.canvas-navigation {
 @media (max-width: 900px) {
   .floating-brand {
     top: 8px;
-  }
-  nav.canvas-navigation {
-    top: 8px;
-    right: 8px;
-    max-width: calc(100vw - 64px);
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-  .navigation-location {
-    max-width: 100%;
-  }
-  .canvas-actions {
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-  .canvas-actions button {
-    padding: 5px 7px;
-    font-size: 11px;
   }
 }
 </style>

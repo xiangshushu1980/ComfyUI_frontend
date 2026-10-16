@@ -3,9 +3,13 @@
 <template>
   <main class="scene-workspace">
     <div ref="host" class="scene-canvas"><canvas ref="element" /></div>
-    <nav class="scene-toolbar" aria-label="场景工作流">
-      <a href="../../">创作图谱</a>
-      <strong>3D 场景 · 只读</strong>
+    <CanvasToolbar aria-label="场景工作流">
+      <template #location>
+        <div class="scene-location">
+          <a :href="graphHref">创作图谱</a>
+          <strong>3D 场景 · 只读</strong>
+        </div>
+      </template>
       <select v-model="sceneId" aria-label="选择场景" @change="load(true)">
         <option value="">选择场景</option>
         <option v-for="scene in scenes" :key="scene.id" :value="scene.id">
@@ -16,6 +20,12 @@
         刷新结果
       </button>
       <button @click="fit">适配画布</button>
+      <button
+        :aria-expanded="settingsOpen"
+        @click="settingsOpen = !settingsOpen"
+      >
+        设置
+      </button>
       <label
         ><input
           v-model="imagesOnly"
@@ -26,7 +36,15 @@
       <span v-if="projection"
         >{{ projection.nodes.length }} 个产物 · {{ projection.readAt }}</span
       >
-    </nav>
+    </CanvasToolbar>
+    <CanvasSettingsPanel
+      v-if="settingsOpen"
+      v-model="canvasSettings"
+      v-model:inspector-width="inspectorWidth"
+      @change="applyCanvasSettings"
+      @width-change="saveInspectorWidth"
+      @close="settingsOpen = false"
+    />
     <div
       v-if="error || !scenes.length || busy"
       class="scene-notice"
@@ -39,7 +57,14 @@
           : '尚未配置场景。请按部署文档设置 STUDIO_3D_SCENES。')
       }}
     </div>
-    <aside v-if="selected" class="scene-inspector">
+    <aside
+      v-if="selected"
+      class="scene-inspector"
+      :style="{
+        width: `min(${inspectorWidth}px, 85vw)`,
+        backgroundColor: `rgba(22, 40, 52, ${canvasSettings.panelOpacity})`
+      }"
+    >
       <button
         class="scene-close"
         aria-label="关闭详情"
@@ -100,7 +125,15 @@ import {
   LGraphNode,
   LiteGraph
 } from '@/lib/litegraph/src/litegraph'
+import {
+  LinkMarkerShape,
+  LinkRenderType
+} from '@/lib/litegraph/src/types/globalEnums'
+import CanvasToolbar from './CanvasToolbar.vue'
+import CanvasSettingsPanel from './CanvasSettingsPanel.vue'
 import { CANVAS_NODE_COLORS, CANVAS_NODE_RADIUS } from './canvasNodeStyle'
+import { canvasSettingsStorageKey, DEFAULT_CANVAS_SETTINGS, inspectorWidthStorageKey, normalizeCanvasSettings } from './canvasSettings';
+import type { CanvasSettings } from './canvasSettings';
 
 type Artifact = {
   id: string
@@ -127,8 +160,21 @@ type Projection = {
 }
 const scenes = ref<{ id: string; name: string }[]>([])
 const sceneId = ref(new URLSearchParams(location.search).get('scene') || '')
+const projectId = ref(
+  new URLSearchParams(location.search).get('project') ||
+    localStorage.getItem('sean-studio-project') ||
+    ''
+)
+const graphHref = computed(() =>
+  projectId.value
+    ? `../../#/canvas/${encodeURIComponent(projectId.value)}`
+    : '../../'
+)
 const projection = ref<Projection | null>(null)
 const selected = ref<Artifact | null>(null)
+const canvasSettings = ref<CanvasSettings>(loadCanvasSettings())
+const inspectorWidth = ref(loadInspectorWidth())
+const settingsOpen = ref(false)
 const busy = ref(false),
   error = ref(''),
   imagesOnly = ref(false)
@@ -153,6 +199,58 @@ const images = new Map<string, HTMLImageElement>()
 const endpoint = '/studio-api/v1/scene-projection'
 const fileUrl = (path: string) =>
   `${endpoint}/${encodeURIComponent(sceneId.value)}/file?path=${encodeURIComponent(path)}`
+function loadCanvasSettings(): CanvasSettings {
+  try {
+    return normalizeCanvasSettings(
+      JSON.parse(
+        localStorage.getItem(canvasSettingsStorageKey(projectId.value)) || '{}'
+      )
+    )
+  } catch {
+    return { ...DEFAULT_CANVAS_SETTINGS }
+  }
+}
+function loadInspectorWidth() {
+  const value = Number(
+    localStorage.getItem(inspectorWidthStorageKey(projectId.value))
+  )
+  const max = Math.max(360, Math.min(1200, window.innerWidth * 0.96))
+  return Number.isFinite(value) ? Math.min(max, Math.max(360, value)) : 520
+}
+function applyCanvasSettings() {
+  if (projectId.value)
+    localStorage.setItem(
+      canvasSettingsStorageKey(projectId.value),
+      JSON.stringify(canvasSettings.value)
+    )
+  if (!canvas) return
+  canvas.links_render_mode =
+    canvasSettings.value.linkStyle === 'linear'
+      ? LinkRenderType.LINEAR_LINK
+      : canvasSettings.value.linkStyle === 'straight'
+        ? LinkRenderType.STRAIGHT_LINK
+        : LinkRenderType.SPLINE_LINK
+  canvas.default_link_color = canvasSettings.value.linkColor
+  canvas.connections_width = canvasSettings.value.linkWidth
+  canvas.linkMarkerShape =
+    canvasSettings.value.linkMarker === 'none'
+      ? LinkMarkerShape.None
+      : canvasSettings.value.linkMarker === 'arrow'
+        ? LinkMarkerShape.Arrow
+        : LinkMarkerShape.Circle
+  for (const node of graph.nodes)
+    Object.assign(node, { padding: canvasSettings.value.nodePadding })
+  canvas.setDirty(true, true)
+}
+function saveInspectorWidth() {
+  const max = Math.max(360, Math.min(1200, window.innerWidth * 0.96))
+  inspectorWidth.value = Math.min(max, Math.max(360, inspectorWidth.value))
+  if (projectId.value)
+    localStorage.setItem(
+      inspectorWidthStorageKey(projectId.value),
+      String(inspectorWidth.value)
+    )
+}
 async function read<T>(url: string): Promise<T> {
   const response = await fetch(url, { cache: 'no-store' })
   if (!response.ok)
@@ -185,7 +283,10 @@ async function load(reset = false) {
     if (disposed || sequence !== request) return
     projection.value = next
     selected.value = next.nodes.find((n) => n.id === selected.value?.id) || null
-    history.replaceState(null, '', `?scene=${encodeURIComponent(id)}`)
+    const query = new URLSearchParams(location.search)
+    query.set('scene', id)
+    if (projectId.value) query.set('project', projectId.value)
+    history.replaceState(null, '', `${location.pathname}?${query}`)
     draw(reset)
   } catch (e) {
     if (sequence === request)
@@ -232,7 +333,16 @@ function draw(reset = false) {
       : 0
     const width = preview
       ? Math.max(1, Math.round(preview.naturalWidth * scale))
-      : Math.max(180, Math.min(260, item.title.length * 8 + 32))
+      : Math.max(190, Math.min(320, Array.from(item.title).length * 13 + 32))
+    const charsPerTitleLine = Math.max(10, Math.floor((width - 32) / 13))
+    const titleChars = Array.from(item.title)
+    const titleLines = Array.from(
+      { length: Math.ceil(titleChars.length / charsPerTitleLine) },
+      (_, index) =>
+        titleChars
+          .slice(index * charsPerTitleLine, (index + 1) * charsPerTitleLine)
+          .join('')
+    )
     const rawPreview = String(
       item.error || item.text || JSON.stringify(item.data) || ''
     )
@@ -247,10 +357,11 @@ function draw(reset = false) {
       : []
     const height = preview
       ? Math.max(1, Math.round(preview.naturalHeight * scale))
-      : previewLines.length
-        ? 112
-        : 180
-    return { item, image: preview, width, height, previewLines }
+      : Math.max(
+          previewLines.length ? 88 : 180,
+          titleLines.length * 17 + 32 + previewLines.length * 16
+        )
+    return { item, image: preview, width, height, previewLines, titleLines }
   })
   const laneWidths = [0, 0, 0, 0, 0]
   for (const entry of prepared)
@@ -260,7 +371,14 @@ function draw(reset = false) {
     )
   laneWidth = Math.max(...laneWidths) + 50
   const rowOffsets = [130, 130, 130, 130, 130]
-  for (const { item, image, width, height, previewLines } of prepared) {
+  for (const {
+    item,
+    image,
+    width,
+    height,
+    previewLines,
+    titleLines
+  } of prepared) {
     const node = new LGraphNode(item.title)
     node.pos = [item.stage * laneWidth + 30, rowOffsets[item.stage]]
     rowOffsets[item.stage] += height + 28
@@ -273,18 +391,27 @@ function draw(reset = false) {
           : '#3f6260'
     node.bgcolor = 'transparent'
     node.shape = LiteGraph.BOX_SHAPE
+    Object.assign(node, { padding: canvasSettings.value.nodePadding })
     Object.defineProperty(node, 'title_mode', { value: LiteGraph.NO_TITLE })
     node.onDrawForeground = (ctx) => {
       ctx.save()
       if (image) {
         ctx.drawImage(image, 0, 0, width, height)
+        const titleHeight = Math.max(30, titleLines.length * 15 + 8)
         ctx.fillStyle = CANVAS_NODE_COLORS.titleBar
-        ctx.fillRect(0, height - 30, width, 30)
+        ctx.fillRect(0, height - titleHeight, width, titleHeight)
         ctx.fillStyle = CANVAS_NODE_COLORS.text
         ctx.font = '600 12px system-ui'
         ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(item.title, width / 2, height - 15, width - 12)
+        ctx.textBaseline = 'top'
+        titleLines.forEach((line, index) =>
+          ctx.fillText(
+            line,
+            width / 2,
+            height - titleHeight + 4 + index * 15,
+            width - canvasSettings.value.nodePadding * 2
+          )
+        )
       } else {
         ctx.fillStyle = CANVAS_NODE_COLORS.background
         ctx.beginPath()
@@ -293,12 +420,16 @@ function draw(reset = false) {
         ctx.fillStyle = CANVAS_NODE_COLORS.text
         ctx.font = '600 13px system-ui'
         ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(
-          item.title,
-          width / 2,
-          previewLines.length ? 24 : height / 2,
-          width - 24
+        ctx.textBaseline = 'top'
+        titleLines.forEach((line, index) =>
+          ctx.fillText(
+            line,
+            width / 2,
+            previewLines.length
+              ? 16 + index * 17
+              : (height - titleLines.length * 17) / 2 + index * 17,
+            width - canvasSettings.value.nodePadding * 2
+          )
         )
         if (previewLines.length) {
           ctx.font = '12px system-ui'
@@ -306,9 +437,30 @@ function draw(reset = false) {
           ctx.textAlign = 'left'
           ctx.textBaseline = 'top'
           previewLines.forEach((line, index) =>
-            ctx.fillText(line, 12, 48 + index * 16, width - 24)
+            ctx.fillText(
+              line,
+              canvasSettings.value.nodePadding,
+              16 + titleLines.length * 17 + 8 + index * 16,
+              width - canvasSettings.value.nodePadding * 2
+            )
           )
         }
+      }
+      if (canvasSettings.value.showCapabilityBadges) {
+        const badgeScale = 1 / (canvas.ds.scale || 1)
+        const badgeWidth = 20 * badgeScale
+        const badgeHeight = 20 * badgeScale
+        const badgeX = width - canvasSettings.value.nodePadding - badgeWidth
+        const badgeY = canvasSettings.value.nodePadding
+        ctx.fillStyle = '#65713f'
+        ctx.beginPath()
+        ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 4 * badgeScale)
+        ctx.fill()
+        ctx.fillStyle = '#f4f7f8'
+        ctx.font = `700 ${10 * badgeScale}px system-ui`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('W', badgeX + badgeWidth / 2, badgeY + badgeHeight / 2)
       }
       ctx.restore()
     }
@@ -330,28 +482,72 @@ onMounted(async () => {
   canvas.show_info = false
   canvas.min_font_size_for_lod = 0
   canvas.background_image = ''
-  canvas.clear_background_color = '#111b26'
-  canvas.onDrawBackground = (ctx) => {
+  canvas.clear_background_color = '#101b25'
+  canvas.onDrawBackground = (ctx, area) => {
+    const step = canvas.ds.scale < 0.4 ? 110 : 22
+    ctx.fillStyle = '#2c3d4d'
+    for (
+      let x = Math.floor(area[0] / step) * step;
+      x < area[0] + area[2];
+      x += step
+    )
+      for (
+        let y = Math.floor(area[1] / step) * step;
+        y < area[1] + area[3];
+        y += step
+      )
+        ctx.fillRect(x, y, 1 / canvas.ds.scale, 1 / canvas.ds.scale)
+    ctx.save()
+    ctx.strokeStyle = '#66809766'
+    ctx.lineWidth = 1 / canvas.ds.scale
+    ctx.beginPath()
+    ctx.moveTo(0, area[1])
+    ctx.lineTo(0, area[1] + area[3])
+    ctx.moveTo(area[0], 0)
+    ctx.lineTo(area[0] + area[2], 0)
+    ctx.stroke()
+    ctx.restore()
     for (const edge of projection.value?.edges || []) {
       const from = renderedNodes.get(edge.from),
         to = renderedNodes.get(edge.to)
       if (!from || !to || from === to) continue
-      const active =
-        selected.value?.id === edge.from || selected.value?.id === edge.to
-      ctx.strokeStyle =
-        edge.status === 'stale' ? '#e2aa6077' : active ? '#9fd5ff' : '#66859933'
-      ctx.lineWidth = active ? 2 : 1
+      const x1 = from.pos[0] + from.size[0],
+        y1 = from.pos[1] + from.size[1] / 2,
+        x2 = to.pos[0],
+        y2 = to.pos[1] + to.size[1] / 2
+      const midX = (x1 + x2) / 2,
+        midY = (y1 + y2) / 2
+      ctx.save()
+      ctx.strokeStyle = canvasSettings.value.linkColor
+      ctx.fillStyle = canvasSettings.value.linkColor
+      ctx.globalAlpha = edge.status === 'stale' ? 0.5 : 0.8
+      ctx.lineWidth = canvasSettings.value.linkWidth
+      if (edge.status === 'stale') ctx.setLineDash([6, 4])
       ctx.beginPath()
-      ctx.moveTo(from.pos[0] + from.size[0], from.pos[1] + 20)
-      ctx.bezierCurveTo(
-        from.pos[0] + from.size[0] + 50,
-        from.pos[1] + 20,
-        to.pos[0] - 50,
-        to.pos[1] + 20,
-        to.pos[0],
-        to.pos[1] + 20
-      )
+      ctx.moveTo(x1, y1)
+      if (canvasSettings.value.linkStyle === 'straight') ctx.lineTo(x2, y2)
+      else if (canvasSettings.value.linkStyle === 'linear') {
+        ctx.lineTo(midX, y1)
+        ctx.lineTo(midX, y2)
+        ctx.lineTo(x2, y2)
+      } else ctx.bezierCurveTo(x1 + 50, y1, x2 - 50, y2, x2, y2)
       ctx.stroke()
+      if (canvasSettings.value.linkMarker === 'circle') {
+        ctx.beginPath()
+        ctx.arc(midX, midY, 4, 0, Math.PI * 2)
+        ctx.fill()
+      } else if (canvasSettings.value.linkMarker === 'arrow') {
+        const angle = Math.atan2(y2 - y1, x2 - x1)
+        ctx.translate(midX, midY)
+        ctx.rotate(angle)
+        ctx.beginPath()
+        ctx.moveTo(6, 0)
+        ctx.lineTo(-5, -4)
+        ctx.lineTo(-5, 4)
+        ctx.closePath()
+        ctx.fill()
+      }
+      ctx.restore()
     }
     ctx.fillStyle = '#b7cde0'
     ctx.font = 'bold 22px sans-serif'
@@ -416,6 +612,7 @@ onMounted(async () => {
   observer = new ResizeObserver(resize)
   observer.observe(host.value!)
   resize()
+  applyCanvasSettings()
   try {
     scenes.value = await read(endpoint)
     if (disposed) return
@@ -440,9 +637,9 @@ onBeforeUnmount(() => {
 .scene-workspace {
   position: fixed;
   inset: 0;
-  background: #111b26;
-  color: #e1e8f0;
-  font: 14px sans-serif;
+  background: #101b25;
+  color: #e2eaf0;
+  font: 13px/1.6 system-ui;
 }
 .scene-canvas {
   position: absolute;
@@ -453,46 +650,36 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
 }
-.scene-toolbar {
-  position: absolute;
-  top: 12px;
-  left: 16px;
-  right: 16px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 12px;
-  background: #233446ee;
-  border-radius: 10px;
-}
-.scene-toolbar button,
-.scene-toolbar select,
 .scene-relation {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
   padding: 7px;
   color: inherit;
   background: #33485b;
   border: 1px solid #5b7286;
   border-radius: 5px;
   cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
 }
 a {
   color: #9fd5ff;
 }
-.scene-toolbar span {
-  font-size: 12px;
-}
 .scene-inspector {
   position: absolute;
-  top: 90px;
-  bottom: 16px;
-  right: 16px;
-  width: min(520px, 85vw);
+  top: 64px;
+  bottom: 12px;
+  right: 12px;
+  width: min(520px, 96vw);
+  min-width: 360px;
+  max-width: 96vw;
   overflow: auto;
-  padding: 20px;
-  background: #203041f5;
-  border: 1px solid #52667a;
-  border-radius: 10px;
+  padding: 16px 20px 24px;
+  background: #162834f5;
+  border: 1px solid #435c6c;
+  border-radius: 12px;
+  box-shadow: 0 20px 70px #0008;
 }
 .scene-inspector img {
   width: 100%;
@@ -511,13 +698,6 @@ a {
 .scene-close {
   float: right;
   cursor: pointer;
-}
-.scene-relation {
-  display: block;
-  width: 100%;
-  margin: 8px 0;
-  text-align: left;
-  overflow-wrap: anywhere;
 }
 .scene-notice {
   position: absolute;

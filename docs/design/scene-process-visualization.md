@@ -2,7 +2,7 @@
 
 Owner: Sean。2026-10-17。任务：`remote-4285562b-c597-4fb4-97e9-e4448f2cea78`（3D 场景工作流只读画布）。
 
-状态：**修改设计已形成，待评审；本文件描述的过程投影与补充记录尚未实现**。当前实现基线为 Entity Canvas Studio `24cb654`；3D 合同基线为 `ca26ca9`。执行依据是现有 Agent + skill，具体核查记录见 [现状审计](../sean-studio/scene-process-audit.md)。本文是本主题后续实现的设计正文；[显示交接](../sean-studio/scene-display-handoff.md)继续描述已经实现的交互。
+状态：**已按五项评审意见收紧合同，待评审；本文件描述的过程投影与补充记录尚未实现**。当前实现基线为 Entity Canvas Studio `24cb654`；3D 合同基线为 `ca26ca9`。执行依据是现有 Agent + skill，具体核查记录见 [现状审计](../sean-studio/scene-process-audit.md)。本文是本主题后续实现的设计正文；[显示交接](../sean-studio/scene-display-handoff.md)继续描述已经实现的交互。
 
 ## 1. 目标与边界
 
@@ -43,18 +43,18 @@ Owner: Sean。2026-10-17。任务：`remote-4285562b-c597-4fb4-97e9-e4448f2cea78
 
 ### 3.2 有类型的关系
 
-| 关系                             | 含义与最低证据                                                                |
-| -------------------------------- | ----------------------------------------------------------------------------- |
-| `consumed`                       | 实际工具输入，工具记录/明确输入 pins 支持；图像条件输入和纯文本提示分开       |
-| `produced`                       | 已有执行记录或 handoff 明确列出的输出；执行失败也可留下部分输出               |
-| `informed_by`                    | 人/Agent 用来理解、参考或比较的材料；不宣称工具实际消费                       |
-| `documented_by`                  | 执行后补充的来源文档，保留 recorded_at 与执行时间差别                         |
-| `candidate_for` / `selected_for` | 候选与某需求有关；bindings/manifest 明确选择版本。选择限定到具体清单/场景     |
-| `used_in`                        | scene spec 的 instance.requirement 经其 pinned manifest 解析到精确资产版本    |
-| `reviewed` / `raises`            | review 或检查针对某版本/图片，并提出具体问题                                  |
-| `revises` / `responds_to`        | 新版本明确引用前版与触发的问题/审核；不能由 rNNN 大小推断                     |
-| `same_world_view`                | 不同视角的实例、资产与 layout/profile pins 一致；显示核实覆盖，不仅凭外观相近 |
-| `selected_delivery`              | design handoff 或明确交付决定指定版本；注明 Agent 交付选择还是用户接受        |
+| 关系                             | 含义与最低证据                                                                 |
+| -------------------------------- | ------------------------------------------------------------------------------ |
+| `consumed`                       | 实际工具输入，工具记录/明确输入 pins 支持；图像条件输入和纯文本提示分开        |
+| `produced`                       | 已有执行记录或 handoff 明确列出的输出；执行失败也可留下部分输出                |
+| `informed_by`                    | 人/Agent 用来理解、参考或比较的材料；不宣称工具实际消费                        |
+| `documented_by`                  | 执行后补充的来源文档，保留 recorded_at 与执行时间差别                          |
+| `candidate_for` / `selected_for` | 候选与某需求有关；bindings/manifest 明确选择版本。选择限定到具体清单/场景      |
+| `used_in`                        | scene spec 的 instance.requirement 经其 pinned manifest 解析到精确资产版本     |
+| `reviewed` / `raises`            | review 或检查针对某版本/图片，并提出具体问题                                   |
+| `revises` / `responds_to`        | 新版本明确引用前版与触发的问题/审核；不能由 rNNN 大小推断                      |
+| `same_world_view`                | 按第 3.4 节区分字段比对、几何/世界核实范围；依赖闭包未核实不得宣称同世界已验证 |
+| `selected_delivery`              | design handoff 或明确交付决定指定版本；注明 Agent 交付选择还是用户接受         |
 
 文件引用另保留原始 `references`，不能一律转成来源箭头。输出列表、图像观察、provenance 文档、实际输入、视角与修订各自有不同含义。空间关系如 support_on/faces 来自布局合同，在布局详情展示，不能与执行依赖混为一类线。
 
@@ -66,6 +66,21 @@ Owner: Sean。2026-10-17。任务：`remote-4285562b-c597-4fb4-97e9-e4448f2cea78
 - 空值需说明“未记录 / 不适用 / 未执行 / 读取失败 / 尚未核实”。其中“不适用、未执行”必须有明确说明，不能从缺文件自动推出。
 - 同一版本存在多个审核时并列保留作者、时间和依据；有明确适用/替代声明才切换摘要，冲突标记待解释，不以最新 mtime 自动覆盖。
 - 图片关系核实、hash 完整性与人工视觉结论并列展示。哈希失配保留历史声明并标失效；不重写旧审核使其看似有效。
+
+### 3.4 同世界视图的核实范围
+
+关系必须携带 `scope`、`verification: verified|partial|unknown|mismatch`、`compared_fields`、`verified_dependencies`、`unverified_dependencies`、`excluded_fields` 和 `basis`。`partial` 不能以绿色“同世界已核实”展示。仅比较 JSON 的结果命名为 `compared_fields_match`，不是已验证的 same_world_view。
+
+| 范围          | 必须核实的状态与依赖                                                                                                                                                                                                    | 可显示的结论                                                 |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `spec_fields` | 显式列出的实例、layout_validation 等字段与差异列表                                                                                                                                                                      | “已比较字段一致 / 不一致”；没有传递依赖保证                  |
+| `geometry`    | 精确场景源/模板；实例选择、LOD/集合、世界变换/父级、scale、实际网格/静态 modifier；prepared 及影响其几何的依赖；layout/profile/约束；地面范围/高度/变换和其他辅助几何；单位、动画/求值时刻及影响几何的构建器设置/默认值 | 闭包核实后才标“几何状态一致”；不能推出光照/材质一致          |
+| `world`       | geometry 的全部内容，加材质、灯光、环境/world、可见性及其他影响场景外观的依赖与设置；相机/输出差异需完整列为排除项                                                                                                      | “同一世界状态的不同视角”，只在明确排除相机与输出的范围内成立 |
+| `full_scene`  | world 的全部内容，加相机/投影、frames、分辨率、渲染器/版本、采样/色彩等设置及其依赖                                                                                                                                     | “完整场景状态一致”；多视角有意改变相机时通常不成立           |
+
+所有范围都必须固定比较的两份记录身份/hash。传递依赖闭包需逐层校验引用的当前字节及历史执行所采用的身份；仅根 spec hash 一致不够。缺失、外部不可访问、历史默认值或构建器版本未固定，均列为未核实，不通过读取当前代码反推旧执行环境。遇到动态模型/仿真或不能解释的默认值，保留未知，不承诺验证器覆盖所有 Blender 状态。
+
+本轮院落 r009/top-r010：仅确认 spec 差异为 `id、intent、camera、frames、resolution`，其余显式字段（含 instances/layout_validation/lights）相同；另核对过 r009 handoff 的直接 inputs。没有完成两次执行的全部模型、地面、场景构建源、隐式默认值及其他传递依赖核实，因此只提供 `scope: spec_fields` 的比较结果，geometry/world/full_scene 均为未完整核实。透视与顶视可以并排比较，不能借此宣布已验证同世界。
 
 ## 4. 画布阅读方式
 
@@ -114,43 +129,97 @@ Owner: Sean。2026-10-17。任务：`remote-4285562b-c597-4fb4-97e9-e4448f2cea78
 
 ### 5.2 第二层：最小补充过程记录（拟定合同）
 
-使用工作区 `process/records/<id>.json`（新拟定目录），每次只新增；由当前 Agent 或现有 CLI 输出尾部记录。记录器只校验/落盘，不派发生成、不控制阶段、不启动 Agent。已有准确字段直接引用，不复制整份合同或日志。
+使用工作区 `process/records/<record_id>.json`（新拟定目录），每次只新增；由当前 Agent 或现有 CLI 输出尾部记录。记录器只校验/落盘，不派发生成、不控制阶段、不启动 Agent。已有准确字段直接引用，不复制整份合同或日志。
+
+#### 身份、生命周期与重复写入
+
+| 字段                        | 明确约束                                                                                                                                                                                  |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `record_id`                 | 工作区内唯一的不可变记录 ID；替代旧示例的模糊 id。文件名必须与其一致                                                                                                                      |
+| `action_id`                 | 一次业务动作尝试的稳定 ID，开始/完成/失败及补录共享；不能以可空 execution.execution_id 代替                                                                                               |
+| `event_type`                | `started` / `finished` / `observed`；observed 用于计划或事后观察，不能暗示执行发生                                                                                                        |
+| `action_state`              | `planned` / `started` / `succeeded` / `failed` / `cancelled` / `skipped` / `unknown`；started 事件只能 started，finished 只能 succeeded/failed/cancelled/skipped，observed 必须有相应证据 |
+| `previous_record_id`        | 当前动作已知的前一条生命周期记录 ID，可空；不是前一场景版本（版本前驱仍为 previous）。无开始记录可直接写 finished，并标开始时间未知                                                       |
+| `retry_of_action_id`        | 真正重新执行时必须生成新 action_id，可用此字段关联上次尝试；网络重发记录不得生成新动作                                                                                                    |
+| `corrects`                  | 可空，非空为被纠正的 record_id；只能指向同 action_id、同 event_type 的当前有效纠正链末端；不是新一次执行                                                                                  |
+| `idempotency_key`           | 每次有意发布一条记录时生成并持久保存的键；网络重试重用原键、原 record_id 和原 payload（含 recorded_at）                                                                                   |
+| `recorded_at / occurred_at` | 写记录时间必填；实际发生时间可空；事后补录不伪造执行时间。时间不决定纠正优先级                                                                                                            |
+| `execution`                 | 可空的真实工具 execution_id、origin 与 raw_status；origin 为 current_run/reused_prior_output/imported/unknown。不借 Task Center ID 冒充工具执行 ID                                        |
+| `related_actions`           | 分别引用修改、渲染、复查等实际 action_id；没有该动作记录则留空并注明“未记录”，不能创建虚假执行                                                                                            |
+
+同一次动作最多一个有效 started、一个有效 finished 和一个有效 observed 槽位；有实际生命周期记录时，observed 的计划/观察不能自动覆盖它。有效 started → finished；不存在 started 的动作允许有证据的单条 finished，包括普通场景只在完成时记录；开始时间仍标未记录。相同动作的多个独立工具步骤须按业务含义拆成不同 action_id，以 related_actions/inputs/outputs 关联，不将修改、渲染和复查压成一个槽位。
+
+同一 action_id 的 scene_id、action、subjects 身份必须一致；身份改变视为新动作，不能复用 action_id。finished 后再新增 started、跳过已有前驱或前驱不属于同动作都返回冲突；skipped 必须有未执行的明确依据且无已执行的 started。正文所述终态先写规则不要求补造 started，也不采用 recorded_at 自动排序。
+
+写入规则（记录器拟定接口）：
+
+1. `(workspace, record_id)` 或 `(workspace, idempotency_key)` 已存在且规范化 JSON payload 完全一致：返回既有记录及 `replayed: true`，不新增文件、动作或状态。规范化忽略 JSON 键顺序/空白，不忽略字段值或数组顺序。
+2. 同 record_id 或同 idempotency_key 对应不同 payload：409 冲突，保留旧字节；调用者必须发新的纠正记录或重新核实，而不是覆写。
+3. 同 action_id/event_type 已有有效记录，却换 ID/键重复发布且没有 corrects：409，返回现存 record_id。相同动作 finished 不能先后写 failed/succeeded；真实重试用新 action_id。
+4. corrects 必须指向当前有效链末端且保留该事件的身份/槽位；新的 record_id/key、纠正依据与作者必填，payload 是该事件的完整替代说明。旧记录保留，投影标为被纠正。终态纠正仍须符合终态枚举和输出证据，不能把纠正说明当作新执行。
+5. corrects 不存在、跨动作、成环、指向旧末端或并发竞争同一末端时返回 409，不按时间择胜。历史导入已有分叉时标 conflict 并保留双方，本版不自动决议历史分叉，需另行明确人工解决合同；冲突未解决前不提供单一成功结论。
+6. ID/幂等键登记、槽位占用、纠正末端检查和文件发布必须具备原子性/互斥与崩溃恢复。实现可用工作区锁及可重建索引；重启从记录重建并先处理临时写入，不能留下半文件被当成有效记录。索引丢失不得绕过重复检查。
+
+命令成功与业务成功仍分开：raw_status/exit_code 保留原值，action_state 的映射需有对应动作的确定性完成证据。只有 started 没有 finished 标“完成状态未知”，不是活跃进程证明；没有记录不能自动补 planned/skipped。纠正不改变真实发生时间，不改原始模型/图片/review 的字节与结论，只替代有依据的过程说明。
 
 ```json
 {
   "schema_version": 1,
   "kind": "scene_process_record",
-  "id": "example-adjust-crate-r002",
+  "record_id": "example-adjust-plan-record-001",
+  "action_id": "example-adjust-crate-attempt-001",
+  "event_type": "observed",
+  "action_state": "planned",
+  "previous_record_id": null,
+  "retry_of_action_id": null,
+  "corrects": null,
+  "idempotency_key": "example-adjust-plan-write-001",
   "recorded_at": "2026-10-17T00:00:00Z",
   "occurred_at": null,
   "scene_id": "example-scene",
   "subjects": [{ "type": "instance", "id": "crate" }],
   "skill": "blender-scene-review",
-  "action": "adjust_layout",
-  "summary": "按已记录审核调整箱子位置并补充细节视角",
-  "execution": { "origin": "current_run", "id": null, "status": "unknown" },
+  "action": "propose_change",
+  "summary": "计划调整箱子位置；尚未声明修改或渲染已执行",
+  "execution": {
+    "origin": "unknown",
+    "execution_id": null,
+    "raw_status": null
+  },
+  "related_actions": [],
   "inputs": [],
   "outputs": [],
   "responds_to": [],
   "previous": [],
   "changes": [],
   "decision": null,
-  "unknowns": ["示意模板；正式记录须填入真实输入、输出和问题证据"]
+  "recorded_by": "example-author",
+  "correction_reason": null,
+  "unknowns": ["结构示例，不是院落的真实过程记录"]
 }
 ```
 
-此示例仅说明结构，不是院落的补录事实，也不是可交付的完整调整记录。具体约束：
+此示例是计划观察，无完成输出要求；不是院落补录事实或已执行调整。正式记录还应满足：
 
-- 文件引用为 `{path, sha256, role}`，路径相对注册工作区；外部引用为明确 external locator，不能交给任意路径预览。ID 关联需限定工作区、场景和逻辑对象。暂时没有 hash 标未核实。
-- inputs 的 role 区分 actual_input / reference / documentation。执行身份与先后取自实际工具收据；没有 execution_id 就 null，不借 Task Center ID 冒充某次生成或渲染。
-- execution.origin 为 current_run / reused_prior_output / imported / unknown。status 原样对应已知执行；只写建议时 action 为 propose_change，不写已调整。
-- responds_to 引用问题或 review（path/hash + 字段定位）；previous 指向明确前版。补写记录写 recorded_at，不伪造 occurred_at。
-- changes 每项包含 subject、field、before、after、reason_ref；数据可从两个已明确关联的原版合同取出。相机、位置/旋转/scale、选用 record、profile、灯光分别列出。无 before 时注明未知。
-- 修改记录输出必须包含新布局/spec/源版本，以及已经实际生成的预览/渲染 pin；尚未渲染写明确未完成的输出，不占用一个虚构 PNG 路径。完成记录缺实际输出时不能画成“已完成修改”。
-- decision 区分 candidate/selected/rejected/deferred/delivery_selected，明确 scope（requirement、manifest、scene version、delivery）及 actor、依据。user_accepted 只来自真实用户验收证据。
-- 检索动作最小补充 query/provider、实际结果或“未保留候选列表”、选用/放弃依据；来源页面/license 仍取 provenance，不能用页面标题假称下载完成。
+- 文件引用为 `{path, sha256, role}`，相对注册工作区；外部仅为明确 locator。inputs.role 区分 actual_input/reference/documentation；暂缺 hash 标未核实。
+- responds_to 引用问题或 review 的 pin/字段，previous 引用前版产物；previous_record_id 只关联同动作生命周期，两者不能混用。
+- changes 含 subject、field、before、after、reason_ref；可从已明确关联的原版合同取出。没有 before 标未知，不能把推导差异当原作者理由。
+- decision 为 candidate/selected/rejected/deferred/delivery_selected，明确 scope、actor 和依据；用户验收仍需原授权证据。
+- 检索动作补充 query/provider、有界实际结果或“候选未保留”、选用依据；页面/license 仍取 provenance。
 
-记录接口应支持以同一动作 ID 关联开始、完成、失败记录，采用不同不可变 record ID 和幂等写入；中断保留 started，缺完成标“完成状态未知”，不能当作活跃进程。普通 Agent 可只在已有动作完成时一次记录，不能为了展示完整而强制增加开始/完成两次调用。已完成记录修正采用新 record + corrects，不覆盖旧版本。
+#### 修改落盘、渲染、复查分别成立
+
+“完成修改”的最小证据是新 spec/layout/源版本已经发布且文件身份可核对；不要求渲染完成。render 是另一个动作，review 是再一个动作，彼此用精确输入/输出和 related_actions 关联。实际有图片才能显示新效果；没有图片显示“暂无新效果”，不能将已经落盘的修改降为未知。
+
+| 修改产物                   | 渲染                       | 复查         | 画布并列显示                               |
+| -------------------------- | -------------------------- | ------------ | ------------------------------------------ |
+| 新 spec pin 已发布         | 明确尚未执行               | 明确尚未执行 | 修改已落盘 · 渲染未执行 · 复查未执行       |
+| 新 spec pin 已发布         | failed，有错误记录         | 明确尚未执行 | 修改已落盘 · 渲染失败 · 复查未执行         |
+| 新 spec pin 已发布         | succeeded，有真实 PNG pins | 尚无审核记录 | 修改已落盘 · 新效果已生成 · 复查状态未记录 |
+| 新 spec pin 已发布         | succeeded                  | revise       | 修改已落盘 · 新效果已生成 · 仍需修正       |
+| 没有可核对的新 spec/源版本 | 仅有建议或未知             | 未知         | 修改尚未证实；已有独立渲染/审核照实展示    |
+
+上表“明确未执行”必须有相应说明/计划证据；仅缺记录显示“状态未记录”。部分 PNG/文件可作为失败尝试产物展示，不自动升级 render 成功。模型修改落盘与模型预览、场景修改落盘与场景渲染采用相同拆分原则。一个动作的 succeed、另一个的 failed 可以同时为真。
 
 ### 5.3 现有 skill/接口的最小落点
 
@@ -192,21 +261,27 @@ Owner: Sean。2026-10-17。任务：`remote-4285562b-c597-4fb4-97e9-e4448f2cea78
 
 ## 7. 实施顺序与验收
 
-| 批次              | 实现范围                                                                             | 可独立核对的结果                                                                           |
-| ----------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| A：已有证据可见   | 语义适配器、参考角色、库/生成来源、manifest 使用关系、scene attempt 与 review 聚合   | 院落可看到被拒概念图、真实选用五资产与来源、既有生成物属于早期复用、各版渲染与 revise 审核 |
-| B：修改过程连续   | 轻量记录 schema/校验/只新增接口；现有 skill 记录点；明确问题→修改→新图；前后比较视图 | 新的小幅场景修订按原流程执行后能解释“因哪条反馈改哪字段、结果怎样”；无记录处保持未知       |
-| C：布局与浏览收敛 | 基于有类型关系的线性/分支布局、对象/尝试文件夹、稳定位置、选择高亮                   | 无父节点重复；鼠标侧键只跳视图；拖动不改业务数据；缺证据不生成虚假连线                     |
+| 批次                      | 实现范围                                                                                  | 可独立核对的结果                                                                                                                                              |
+| ------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A：院落最小可追溯浏览闭环 | 现有合同适配、基本对象/尝试文件夹、跨关系跳转与选中高亮、精确 pins/角色/状态诊断          | 实际串通 requirement → manifest 选用资产 → spec instance → handoff 的真实渲染 → 独立 review；侧键只跳视图，返回不恢复选择；被拒概念和早期生成复用保持正确角色 |
+| B：修改过程连续与记录覆盖 | 生命周期/幂等/纠正合同与记录器；现有 skill 记录点；修改、渲染、复查独立状态；问题与前后图 | 新 spec 已落盘但渲染失败仍正确显示；开始/结束重发无重复动作；纠正链与真实重试可区分；无修改关联处保持未知                                                     |
+| C：复杂布局与覆盖扩展     | 自动连通分量/多分支布局优化、大规模对象/尝试、更多搜索/手工制作/处理前后记录覆盖          | 在 A 已可浏览的基础上提高密度与清晰度；不补造因果，不要求为覆盖而重新生成模型                                                                                 |
+
+A 必须完成的具体链与边界：从院落需求 `REQ-table` 进入 `manifests/courtyard-ready-r002.json` 的桌资产 record/review/card，再定位 `specs/courtyard-scene-r009.json` 的 table instance，沿 `scenes/courtyard-scene-r009/handoff.json` 查看真实 PNG，最后打开 `reviews/courtyard-review-r002.json` 针对该 handoff 的审核。每段显示实际 pin/字段依据并校验直接及必要传递引用，失败时能看到诊断而非断链消失。反向也能从图片追到审核、实例和资产选择。这个闭环不依赖新增 process 记录，不以“已最终交付”或“全部同世界依赖已验证”为前提。
+
+对象/尝试文件夹与跨关系高亮是 A 的必需验收项，不能留到 C。r004 的 revise 审核与 r009 的差异可以作为旁支证据展示，但缺 previous/responds_to 时不作为已核实的修订因果连线。
 
 验收不要求最终场景全 pass，也不规定每个阶段必须有新产物。应覆盖以下观看问题：
 
-- 整体和物体参考能看见，且能说清用途、被拒/采纳状态、是否真正作为生成输入。
-- 能区分本地复用、线上取得、早期生成复用与本轮创建；找到候选及选择依据。
-- 能从物体预览追到源与准备版本，再追到用它的具体场景实例。
-- 能从某次摆放看到真实渲染、对应检查和问题；失败尝试不消失。
-- 对有证据的修改，能看前图、触发问题、改动字段、新图和复查；对无明确父版本的旧结果不冒称连续返工。
-- 透视/顶视是否来自同世界，有可核对依据；镜头变化与几何变化分开。
-- 检查 passed、交付选择、用户验收不互相冒充。缺参考/缺参数/缺修订关系都可解释。
-- 用户可据此提出“搜索选择不合理、生成效果不符、修正未回应问题、检查覆盖不足”等建议；反馈继续交当前 Agent 处理，不在本期画布自动执行。
+- **V1 参考与输入**：整体和物体参考能看见，且能说清用途、被拒/采纳状态、是否真正作为生成输入。
+- **V2 获取与创建**：能区分本地复用、线上取得、早期生成复用与本轮创建；找到候选及选择依据。
+- **V3 最小追溯闭环**：能从物体预览追到源与准备版本，再追到用它的具体场景实例。
+- **V4 尝试与失败**：能从某次摆放看到真实渲染、对应检查和问题；失败尝试不消失。
+- **V5 修改与效果**：对有证据的修改，能看前图、触发问题、改动字段、新图和复查；对无明确父版本的旧结果不冒称连续返工。
+- **V6 世界核实范围**：透视/顶视是否来自同世界，有可核对依据；镜头变化与几何变化分开。
+- **V7 选择与交付**：检查 passed、交付选择、用户验收不互相冒充。缺参考/缺参数/缺修订关系都可解释。
+- **V8 可理解与反馈**：用户可据此提出“搜索选择不合理、生成效果不符、修正未回应问题、检查覆盖不足”等建议；反馈继续交当前 Agent 处理，不在本期画布自动执行。
 
-实施验证需覆盖合同适配与引用完整性、记录幂等/失败恢复、浏览器真实文件夹导航/拖动，以及有差异与无差异的前后图。此轮仅完成设计和现状核查，未执行上述实现验收或新的制作修订。
+**V9 生命周期与幂等**：覆盖同 ID/同键重发、冲突 payload、重复槽位、纠正末端竞争/分叉、真实重试、崩溃恢复，以及修改成功/渲染失败/复查未执行的并列状态。
+
+实施验证还需覆盖合同适配与引用完整性、浏览器真实文件夹导航/拖动，以及有差异与无差异的前后图。此轮仅完成设计和现状核查，未执行上述实现验收或新的制作修订。

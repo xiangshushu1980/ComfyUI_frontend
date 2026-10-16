@@ -4,7 +4,7 @@
   <main class="scene-workspace">
     <div ref="host" class="scene-canvas"><canvas ref="element" /></div>
     <nav class="scene-toolbar" aria-label="场景工作流">
-      <a href="/">创作图谱</a>
+      <a href="../../">创作图谱</a>
       <strong>3D 场景 · 只读</strong>
       <select v-model="sceneId" aria-label="选择场景" @change="load(true)">
         <option value="">选择场景</option>
@@ -94,7 +94,13 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { LGraph, LGraphCanvas, LGraphNode } from '@/lib/litegraph/src/litegraph'
+import {
+  LGraph,
+  LGraphCanvas,
+  LGraphNode,
+  LiteGraph
+} from '@/lib/litegraph/src/litegraph'
+import { CANVAS_NODE_COLORS, CANVAS_NODE_RADIUS } from './canvasNodeStyle'
 
 type Artifact = {
   id: string
@@ -140,8 +146,10 @@ let graph: LGraph,
   request = 0
 let laneWidth = 400
 let disposed = false
+const logicalViewport = new Float64Array(4)
 const nodePaths = new Map<LGraphNode, string>()
 const renderedNodes = new Map<string, LGraphNode>()
+const images = new Map<string, HTMLImageElement>()
 const endpoint = '/studio-api/v1/scene-projection'
 const fileUrl = (path: string) =>
   `${endpoint}/${encodeURIComponent(sceneId.value)}/file?path=${encodeURIComponent(path)}`
@@ -188,9 +196,17 @@ async function load(reset = false) {
 }
 function fit() {
   if (!canvas || !graph.nodes.length || !host.value) return
-  const width = Math.max(...graph.nodes.map((n) => n.pos[0] + n.size[0])) + 60
-  canvas.ds.scale = Math.min(1, host.value.clientWidth / width)
-  canvas.ds.offset = [40, 80]
+  const left = Math.min(...graph.nodes.map((n) => n.pos[0]))
+  const top = Math.min(...graph.nodes.map((n) => n.pos[1] - 24))
+  const right = Math.max(...graph.nodes.map((n) => n.pos[0] + n.size[0]))
+  const bottom = Math.max(...graph.nodes.map((n) => n.pos[1] + n.size[1]))
+  const scale = Math.min(
+    1,
+    (host.value.clientWidth - 60) / (right - left),
+    (host.value.clientHeight - 100) / (bottom - top)
+  )
+  canvas.ds.scale = scale
+  canvas.ds.offset = [30 / scale - left, 50 / scale - top]
   canvas.setDirty(true, true)
 }
 function draw(reset = false) {
@@ -199,49 +215,102 @@ function draw(reset = false) {
   renderedNodes.clear()
   const data = projection.value
   if (!data) return
-  const rows = [0, 0, 0, 0, 0]
-  const nodeWidth = Math.max(
-    350,
-    ...data.nodes.map((item) => item.title.length * 8 + 30)
-  )
-  laneWidth = nodeWidth + 50
-  for (const item of data.nodes) {
-    if (imagesOnly.value && !item.image) continue
+  const items = data.nodes.filter((item) => !imagesOnly.value || item.image)
+  const prepared = items.map((item) => {
+    let image = images.get(item.id)
+    if (item.image && !image) {
+      image = new Image()
+      image.onload = () => {
+        if (!disposed) draw(true)
+      }
+      image.src = fileUrl(item.id)
+      images.set(item.id, image)
+    }
+    const preview = image?.complete && image.naturalWidth ? image : undefined
+    const scale = preview
+      ? Math.min(1, 360 / preview.naturalWidth, 240 / preview.naturalHeight)
+      : 0
+    const width = preview
+      ? Math.max(1, Math.round(preview.naturalWidth * scale))
+      : Math.max(180, Math.min(260, item.title.length * 8 + 32))
+    const rawPreview = String(
+      item.error || item.text || JSON.stringify(item.data) || ''
+    )
+      .replace(/\s+/g, ' ')
+      .trim()
+    const previewLines = rawPreview
+      ? Array.from({ length: 2 }, (_, index) =>
+          Array.from(rawPreview)
+            .slice(index * 32, (index + 1) * 32)
+            .join('')
+        ).filter(Boolean)
+      : []
+    const height = preview
+      ? Math.max(1, Math.round(preview.naturalHeight * scale))
+      : previewLines.length
+        ? 112
+        : 180
+    return { item, image: preview, width, height, previewLines }
+  })
+  const laneWidths = [0, 0, 0, 0, 0]
+  for (const entry of prepared)
+    laneWidths[entry.item.stage] = Math.max(
+      laneWidths[entry.item.stage],
+      entry.width
+    )
+  laneWidth = Math.max(...laneWidths) + 50
+  const rowOffsets = [130, 130, 130, 130, 130]
+  for (const { item, image, width, height, previewLines } of prepared) {
     const node = new LGraphNode(item.title)
-    node.pos = [item.stage * laneWidth + 30, 130 + rows[item.stage]++ * 245]
-    node.size = [nodeWidth, 200]
+    node.pos = [item.stage * laneWidth + 30, rowOffsets[item.stage]]
+    rowOffsets[item.stage] += height + 28
+    node.size = [width, height]
     node.color =
       item.status === 'unknown'
         ? '#465260'
         : /fail|unreadable|reject/.test(item.status)
           ? '#8b4949'
           : '#3f6260'
-    let image: HTMLImageElement | undefined
-    if (item.image) {
-      image = new Image()
-      image.onload = () => {
-        if (!disposed) canvas.setDirty(true, true)
-      }
-      image.src = fileUrl(item.id)
-    }
+    node.bgcolor = 'transparent'
+    node.shape = LiteGraph.BOX_SHAPE
+    Object.defineProperty(node, 'title_mode', { value: LiteGraph.NO_TITLE })
     node.onDrawForeground = (ctx) => {
-      ctx.fillStyle = '#d8e0ea'
-      ctx.font = '13px sans-serif'
-      ctx.fillText(`${data.stages[item.stage]} · ${item.status}`, 12, 36)
-      if (image?.complete && image.naturalWidth) {
-        const scale = Math.min(
-          (nodeWidth - 24) / image.naturalWidth,
-          138 / image.naturalHeight
-        )
-        const w = image.naturalWidth * scale,
-          h = image.naturalHeight * scale
-        ctx.drawImage(image, (nodeWidth - w) / 2, 48, w, h)
+      ctx.save()
+      if (image) {
+        ctx.drawImage(image, 0, 0, width, height)
+        ctx.fillStyle = CANVAS_NODE_COLORS.titleBar
+        ctx.fillRect(0, height - 30, width, 30)
+        ctx.fillStyle = CANVAS_NODE_COLORS.text
+        ctx.font = '600 12px system-ui'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(item.title, width / 2, height - 15, width - 12)
       } else {
-        const text =
-          item.error || item.text || JSON.stringify(item.data) || item.id
-        for (let i = 0; i < 5; i++)
-          ctx.fillText(text.slice(i * 36, (i + 1) * 36), 12, 64 + i * 23)
+        ctx.fillStyle = CANVAS_NODE_COLORS.background
+        ctx.beginPath()
+        ctx.roundRect(0, 0, width, height, CANVAS_NODE_RADIUS)
+        ctx.fill()
+        ctx.fillStyle = CANVAS_NODE_COLORS.text
+        ctx.font = '600 13px system-ui'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(
+          item.title,
+          width / 2,
+          previewLines.length ? 24 : height / 2,
+          width - 24
+        )
+        if (previewLines.length) {
+          ctx.font = '12px system-ui'
+          ctx.fillStyle = CANVAS_NODE_COLORS.body
+          ctx.textAlign = 'left'
+          ctx.textBaseline = 'top'
+          previewLines.forEach((line, index) =>
+            ctx.fillText(line, 12, 48 + index * 16, width - 24)
+          )
+        }
       }
+      ctx.restore()
     }
     graph.add(node)
     nodePaths.set(node, item.id)
@@ -321,18 +390,32 @@ onMounted(async () => {
           (n) =>
             x >= n.pos[0] &&
             x <= n.pos[0] + n.size[0] &&
-            y >= n.pos[1] - 30 &&
+            y >= n.pos[1] &&
             y <= n.pos[1] + n.size[1]
         )
       if (node) selectPath(nodePaths.get(node)!)
     },
     true
   )
-  observer = new ResizeObserver(() => {
-    canvas.resize(host.value!.clientWidth, host.value!.clientHeight)
+  const computeVisibleArea = canvas.ds.computeVisibleArea.bind(canvas.ds)
+  canvas.ds.computeVisibleArea = () => computeVisibleArea(logicalViewport)
+  const resize = () => {
+    const rect = host.value!.getBoundingClientRect()
+    logicalViewport[2] = rect.width
+    logicalViewport[3] = rect.height
+    const scale = window.devicePixelRatio || 1
+    canvas.resize(
+      Math.round(rect.width * scale),
+      Math.round(rect.height * scale)
+    )
+    canvas.ds.computeVisibleArea(logicalViewport)
+    canvas.ctx.setTransform(scale, 0, 0, scale, 0, 0)
+    canvas.bgcanvas.getContext('2d')?.setTransform(scale, 0, 0, scale, 0, 0)
     canvas.setDirty(true, true)
-  })
+  }
+  observer = new ResizeObserver(resize)
   observer.observe(host.value!)
+  resize()
   try {
     scenes.value = await read(endpoint)
     if (disposed) return
@@ -367,6 +450,8 @@ onBeforeUnmount(() => {
 }
 .scene-canvas canvas {
   display: block;
+  width: 100%;
+  height: 100%;
 }
 .scene-toolbar {
   position: absolute;

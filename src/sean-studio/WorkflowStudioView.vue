@@ -992,6 +992,7 @@ import type { Rect } from '@/lib/litegraph/src/interfaces'
 import { toNodeId } from '@/types/nodeId'
 import NativeWorkflow from './NativeWorkflow.vue'
 import { requestId, studioApi } from './api'
+import { CANVAS_NODE_COLORS, CANVAS_NODE_RADIUS } from './canvasNodeStyle'
 import {
   canDrill,
   hitCanvasNode,
@@ -3773,7 +3774,7 @@ function projectGraph() {
           const badgeHeight = 28 * badgeScale
           const badgeX = (n.size[0] - badgeWidth) / 2
           const badgeY = (n.size[1] - badgeHeight) / 2
-          ctx.fillStyle = 'rgba(8, 18, 26, 0.78)'
+          ctx.fillStyle = CANVAS_NODE_COLORS.titleBar
           ctx.beginPath()
           ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 7 * badgeScale)
           ctx.fill()
@@ -3830,9 +3831,9 @@ function projectGraph() {
         )
         const labelX = (n.size[0] - labelWidth) / 2
         const labelY = n.size[1] - labelHeight
-        ctx.fillStyle = 'rgba(8, 18, 26, 0.76)'
+        ctx.fillStyle = CANVAS_NODE_COLORS.titleBar
         ctx.fillRect(labelX, labelY, labelWidth, labelHeight)
-        ctx.fillStyle = '#f1f5f7'
+        ctx.fillStyle = CANVAS_NODE_COLORS.text
         ctx.textBaseline = 'top'
         ctx.textAlign = 'center'
         labelLines.forEach((line, index) =>
@@ -3868,13 +3869,13 @@ function projectGraph() {
         return
       }
       ctx.save()
-      ctx.fillStyle = '#203342'
+      ctx.fillStyle = CANVAS_NODE_COLORS.background
       ctx.beginPath()
-      ctx.roundRect(0, 0, n.size[0], n.size[1], 7)
+      ctx.roundRect(0, 0, n.size[0], n.size[1], CANVAS_NODE_RADIUS)
       ctx.fill()
       ctx.textBaseline = 'top'
       ctx.font = '600 13px system-ui'
-      ctx.fillStyle = '#f1f5f7'
+      ctx.fillStyle = CANVAS_NODE_COLORS.text
       ctx.textAlign = 'center'
       const titleY = dimensions.square
         ? (n.size[1] - dimensions.titleLines.length * 17) / 2

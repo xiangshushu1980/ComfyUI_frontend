@@ -4,6 +4,8 @@ Owner: Sean。2026-10-17。对应 [修改设计](../design/scene-process-visuali
 
 范围：读取现有 skill、合同、工具源代码与院落正式 JSON 产物；没有重新运行制作、查询在线资源、生成图像/模型或查看并重新评价图片。本轮检查是记录/字段/引用核查；已有审核中的视觉结论属于原审核者。没有全量读取 progress、日志或执行档案。
 
+本表是设计时的历史审计；后续批次 A 已补上的展示能力与验证范围见 [实施记录](scene-process-batch-a.md)，不反向改写本次审计的源证据覆盖。
+
 ## 基线与依据
 
 - UI 仓库 `/home/sean/projects/entity-canvas-studio`，基线 `24cb6543482cdd93041f5211684296102ae2371f`；工作树开工干净。

@@ -2,7 +2,7 @@
 
 Owner: Sean。2026-10-17；任务 remote-4285562b-c597-4fb4-97e9-e4448f2cea78；基于用户界面基线 47aa74b。用户授权先实现方向，后续可由新 Agent 微调。
 
-后续过程展示的修改设计见 [Agent 执行过程可视化](../design/scene-process-visualization.md)，其依据见 [现状审计](scene-process-audit.md)。该设计尚未实现，下文仍为已实现显示基线。
+后续过程展示的修改设计见 [Agent 执行过程可视化](../design/scene-process-visualization.md)，其依据见 [现状审计](scene-process-audit.md)。批次 A 的语义投影、对象/尝试文件夹及跨关系高亮已实现，见 [实施记录](scene-process-batch-a.md)；下文保留首版显示基线，以实施记录为当前差异依据。
 
 ## 当前行为
 

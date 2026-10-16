@@ -1,4 +1,5 @@
 // Owner: Sean. Read-only filesystem projection; no product store or Agent binding.
+import { sceneProcess } from './scene-process.mjs'
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { resolve, relative, extname, sep } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -216,14 +217,18 @@ export class SceneProjection {
       }
       edge.status = referenceStates.get(edge.from)
     }
+    const presentation = await sceneProcess(root, nodes)
     return {
+      presentation,
       id,
       name: scene.name || id,
       stages,
       nodes,
       edges,
       warnings: [...new Set(warnings)],
-      revision: sha(JSON.stringify(nodes.map((n) => [n.id, n.sha256]))),
+      revision: sha(
+        JSON.stringify([nodes.map((n) => [n.id, n.sha256]), presentation])
+      ),
       readAt: new Date().toISOString()
     }
   }

@@ -4,7 +4,9 @@ Owner: Sean。任务 `remote-4285562b-c597-4fb4-97e9-e4448f2cea78`。
 
 显示逻辑已在 2026-10-17 更新为步骤总览、结果归组与局部环形展开，见 [显示逻辑与微调交接](scene-display-handoff.md)。下文文件投影合同继续有效。
 
-过程语义展示的后续设计：[Agent 执行过程可视化](../design/scene-process-visualization.md)（设计稿，尚未实现；沿用现有 Agent + skill）。
+过程语义展示的后续设计：[Agent 执行过程可视化](../design/scene-process-visualization.md)（批次 A 已实现，B/C 尚未实现；沿用现有 Agent + skill）。
+
+既有文件投影上新增的语义索引、文件夹、关系导航及核实范围见 [批次 A 实施记录](scene-process-batch-a.md)。原始文件引用的 present/unprojected 等状态继续保留；presentation 的 verified/partial 是另一层带 scope 的核实，不能混用。语义 revision 也包含核实结果变化。
 
 ## 使用与配置
 

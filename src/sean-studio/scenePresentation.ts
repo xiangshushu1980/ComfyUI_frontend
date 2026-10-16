@@ -18,6 +18,7 @@ export type SceneResultGroup = {
   stage: number
   files: SceneArtifact[]
   preview: SceneArtifact
+  folder?: boolean
 }
 const revisionKey = (path: string) => path.replace(/-r\d+/g, '-revision')
 const version = (path: string) =>

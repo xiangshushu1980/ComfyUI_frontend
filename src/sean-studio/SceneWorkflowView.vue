@@ -8,7 +8,8 @@
         <div class="scene-location">
           <strong>3D 场景 · 只读</strong>
           <span v-if="focusedStage !== null">
-            / {{ SCENE_STEP_NAMES[focusedStage] }}</span
+            / {{ SCENE_STEP_NAMES[focusedStage]
+            }}<span v-if="folderTitle"> / {{ folderTitle }}</span></span
           >
         </div>
       </template>
@@ -82,12 +83,19 @@
         {{ SCENE_STEP_NAMES[selectedGroup.stage] }} ·
         {{ selectedGroup.files.length }} 个文件
       </p>
-      <p>同一结果的文件与修订归在一起。展示顺序不代表已采纳版本。</p>
+      <p>依据现有合同组织；展示顺序不代表交付或用户采用。</p>
+      <p v-for="(decision, index) in selectedDecisions" :key="index">
+        {{ decision.role }} · {{ decision.decision }} ·
+        {{ decision.rejection_reason || decision.notes }}
+      </p>
       <img
         v-if="selectedGroup.preview.image"
         :src="fileUrl(selectedGroup.preview.id)"
         :alt="selectedGroup.title"
       />
+      <button v-if="selectedGroup.folder" @click="enterFolder(selectedGroup)">
+        进入文件夹
+      </button>
       <h3>文件与版本</h3>
       <button
         v-for="file in selectedGroup.files"
@@ -98,14 +106,39 @@
         {{ file.title }} · {{ file.status }}<br />{{ file.id }}
       </button>
     </aside>
+    <aside
+      v-if="(selected || selectedGroup) && processRelations.length"
+      class="scene-process-relations"
+    >
+      <h3>关联对象</h3>
+      <button
+        v-for="(relation, index) in processRelations"
+        :key="index"
+        class="scene-relation"
+        @click="clickRelation(relationTarget(relation.from, relation.to))"
+        @dblclick="
+          doubleClickRelation(relationTarget(relation.from, relation.to))
+        "
+      >
+        {{ relation.type }} · {{ relation.verification }}<br />
+        {{ relatedTitle(relationTarget(relation.from, relation.to)) }}<br />
+        {{ relation.basis[0]?.path }} # {{ relation.field }}<br />
+        <span class="scene-path"
+          >{{ relation.pin?.path }} ·
+          {{ relation.pin?.sha256 || relation.basis[0]?.sha256 }}</span
+        ><br />
+        {{ relation.scope }}
+      </button>
+      <p>单击查看属性 · 双击进入关联视图</p>
+    </aside>
     <div v-if="projection" class="scene-guide">
       {{
         focusedStage === null
           ? '流程总览 · 点击步骤，展开该步的资产和结果'
           : SCENE_STEP_DESCRIPTIONS[focusedStage] +
             ' · 点击结果查看文件与版本，拖动调整位置'
-      }}<br />鼠标侧键 4 后退 / 5 前进 ·
-      实线箭头：制作顺序　选中结果：显示文件引用
+      }}<br />鼠标侧键 4 后退 / 5 前进 · 总览箭头：阅读顺序 · 双击文件夹进入 ·
+      选中后高亮关联
     </div>
     <aside
       v-if="selected"
@@ -129,7 +162,15 @@
         <code>{{ selected.sha256 }}</code>
       </details>
       <p v-if="selected.error">{{ selected.error }}</p>
-      <a :href="fileUrl(selected.id)" target="_blank" rel="noopener"
+      <p v-for="(decision, index) in selectedDecisions" :key="index">
+        {{ decision.role }} · {{ decision.decision }} ·
+        {{ decision.rejection_reason || decision.notes }}
+      </p>
+      <a
+        v-if="selected.kind !== 'unprojected'"
+        :href="fileUrl(selectedSource)"
+        target="_blank"
+        rel="noopener"
         >打开原始产物</a
       >
       <a
@@ -156,6 +197,28 @@
       <h3>产物内容</h3>
       <pre>{{ selected.text || JSON.stringify(selected.data, null, 2) }}</pre>
     </aside>
+    <div
+      v-if="previewImage"
+      class="scene-image-preview"
+      @click="previewImage = null"
+    >
+      <button aria-label="关闭图片预览" @click="previewImage = null">×</button>
+      <img :src="fileUrl(previewImage)" alt="原始渲染或预览图" />
+    </div>
+    <details
+      v-if="projection?.presentation?.diagnostics.length"
+      class="scene-diagnostics"
+    >
+      <summary>
+        关联诊断（{{ projection.presentation.diagnostics.length }}）
+      </summary>
+      <p
+        v-for="(diagnostic, index) in projection.presentation.diagnostics"
+        :key="index"
+      >
+        {{ diagnostic.message }}
+      </p>
+    </details>
     <details v-if="projection?.warnings.length" class="scene-warnings">
       <summary>读取提示（{{ projection.warnings.length }}）</summary>
       <p v-for="warning in projection.warnings" :key="warning">{{ warning }}</p>
@@ -193,6 +256,8 @@ import {
   SCENE_STEP_DESCRIPTIONS
 } from './scenePresentation'
 import type { SceneResultGroup } from './scenePresentation'
+import { processArtifacts, processGroups } from './sceneProcess'
+import type { SceneProcess } from './sceneProcess'
 
 type Artifact = {
   id: string
@@ -216,6 +281,7 @@ type Projection = {
   warnings: string[]
   revision: string
   readAt: string
+  presentation?: SceneProcess
 }
 const scenes = ref<{ id: string; name: string }[]>([])
 const sceneId = ref(new URLSearchParams(location.search).get('scene') || '')
@@ -226,6 +292,7 @@ const projectId = ref(
 )
 const projection = ref<Projection | null>(null)
 const selected = ref<Artifact | null>(null)
+const previewImage = ref<string | null>(null)
 const canvasSettings = ref<CanvasSettings>(loadCanvasSettings())
 const inspectorWidth = ref(loadInspectorWidth())
 const settingsOpen = ref(false)
@@ -234,6 +301,20 @@ const busy = ref(false),
   imagesOnly = ref(false)
 const host = ref<HTMLDivElement>(),
   element = ref<HTMLCanvasElement>()
+const selectedDecisions = computed(
+  () =>
+    projection.value?.presentation?.decisions.filter((d) =>
+      activeIds.value.has(d.path)
+    ) || []
+)
+const selectedSource = computed(
+  () =>
+    projection.value?.presentation?.entities.find(
+      (e) => e.id === selected.value?.id
+    )?.source ||
+    selected.value?.id ||
+    ''
+)
 const selectedEdges = computed(
   () =>
     projection.value?.edges.filter(
@@ -246,9 +327,78 @@ let graph: LGraph,
   request = 0
 const focusedStage = ref<number | null>(null)
 const selectedGroup = ref<SceneResultGroup | null>(null)
-const resultGroups = computed(() =>
-  groupSceneResults(projection.value?.nodes || [])
+const focusedFolder = ref<string | null>(null)
+const allArtifacts = computed(() =>
+  processArtifacts(
+    projection.value?.nodes || [],
+    projection.value?.presentation
+  )
 )
+const resultGroups = computed(() => {
+  const files = projection.value?.nodes || []
+  const fallback = groupSceneResults(files)
+  return projection.value?.presentation
+    ? processGroups(files, projection.value.presentation, fallback)
+    : fallback
+})
+const folderTitle = computed(
+  () => resultGroups.value.find((g) => g.id === focusedFolder.value)?.title
+)
+const activeIds = computed(
+  () =>
+    new Set(
+      (selectedGroup.value?.folder
+        ? [selectedGroup.value.files[0].id]
+        : selectedGroup.value?.files.map((f) => f.id)) ||
+        (selected.value ? [selected.value.id] : [])
+    )
+)
+let relationClickTimer: ReturnType<typeof setTimeout> | undefined
+function clickRelation(id: string) {
+  clearTimeout(relationClickTimer)
+  relationClickTimer = setTimeout(() => selectPath(id), 240)
+}
+function doubleClickRelation(id: string) {
+  clearTimeout(relationClickTimer)
+  navigateRelated(id)
+}
+const processRelations = computed(
+  () =>
+    projection.value?.presentation?.relations.filter(
+      (r) => activeIds.value.has(r.from) || activeIds.value.has(r.to)
+    ) || []
+)
+const relatedIds = computed(
+  () =>
+    new Set([
+      ...activeIds.value,
+      ...processRelations.value.flatMap((r) => [r.from, r.to])
+    ])
+)
+function relatedTitle(id: string) {
+  return allArtifacts.value.find((f) => f.id === id)?.title || id
+}
+function relationTarget(from: string, to: string) {
+  return activeIds.value.has(from) ? to : from
+}
+function navigateRelated(id: string) {
+  const folder = resultGroups.value.find(
+    (g) => g.folder && g.files.some((f) => f.id === id)
+  )
+  const file = allArtifacts.value.find((f) => f.id === id)
+  if (folder && focusedFolder.value !== folder.id) enterFolder(folder)
+  else if (!folder && file && focusedStage.value !== file.stage)
+    openStage(file.stage)
+  selectPath(id)
+}
+function enterFolder(group: SceneResultGroup) {
+  rememberView()
+  focusedStage.value = group.stage
+  focusedFolder.value = group.id
+  selectedGroup.value = null
+  selected.value = null
+  draw(true)
+}
 const nodeGroups = new Map<string, SceneResultGroup>()
 const hubStages = new Map<string, number>()
 const stageCenters: [number, number][] = [
@@ -258,9 +408,10 @@ const stageCenters: [number, number][] = [
   [1920, 0],
   [2560, 0]
 ]
-const stepLinks = ['准备资产', '使用资产搭建', '按布局查看', '检查结果']
+const stepLinks = ['阅读顺序', '阅读顺序', '阅读顺序', '阅读顺序']
 type ViewState = {
   stage: number | null
+  folder: string | null
   scale: number
   offset: [number, number]
 }
@@ -269,6 +420,7 @@ const backViews: ViewState[] = [],
 function captureView(): ViewState {
   return {
     stage: focusedStage.value,
+    folder: focusedFolder.value,
     scale: canvas.ds.scale,
     offset: [canvas.ds.offset[0], canvas.ds.offset[1]]
   }
@@ -279,7 +431,9 @@ function rememberView() {
 }
 function restoreView(view: ViewState) {
   autoFitImages = false
+  previewImage.value = null
   focusedStage.value = view.stage
+  focusedFolder.value = view.folder
   selectedGroup.value = null
   selected.value = null
   draw(false)
@@ -311,6 +465,7 @@ function overview() {
     return
   }
   rememberView()
+  focusedFolder.value = null
   focusedStage.value = null
   selectedGroup.value = null
   selected.value = null
@@ -319,6 +474,7 @@ function overview() {
 function openStage(stage: number) {
   if (focusedStage.value === stage) return
   rememberView()
+  focusedFolder.value = null
   focusedStage.value = stage
   selectedGroup.value = null
   selected.value = null
@@ -334,7 +490,7 @@ function closeDetails() {
 }
 const layoutCache = new Map<string, Record<string, [number, number]>>()
 function layoutKey() {
-  return `sean-scene-positions-v1:${sceneId.value}:${focusedStage.value ?? 'overview'}`
+  return `sean-scene-positions-v1:${sceneId.value}:${focusedStage.value ?? 'overview'}${focusedFolder.value ? ':' + focusedFolder.value : ''}`
 }
 function savedPositions() {
   const key = layoutKey()
@@ -434,16 +590,19 @@ function selectPath(path: string) {
     return
   }
   const group = nodeGroups.get(path)
-  if (group) {
+  if (group && (group.files.length > 1 || group.folder)) {
     selectedGroup.value = group
     selected.value = null
     canvas.setDirty(true, true)
     return
   }
-  const node = projection.value?.nodes.find((n) => n.id === path)
-  if (node) {
+  const node = allArtifacts.value.find((n) => n.id === path)
+  const placeholder = resultGroups.value
+    .flatMap((g) => g.files)
+    .find((f) => f.id === path)
+  if (node || placeholder) {
     selectedGroup.value = null
-    selected.value = node
+    selected.value = node || placeholder || null
     canvas.setDirty(true, true)
   }
 }
@@ -452,7 +611,9 @@ async function load(reset = false) {
   error.value = ''
   if (reset) {
     selected.value = null
+    previewImage.value = null
     selectedGroup.value = null
+    focusedFolder.value = null
     focusedStage.value = null
     backViews.length = 0
     forwardViews.length = 0
@@ -469,11 +630,13 @@ async function load(reset = false) {
   try {
     const next = await read<Projection>(`${endpoint}/${encodeURIComponent(id)}`)
     if (disposed || sequence !== request) return
+    if (projection.value?.revision !== next.revision) images.clear()
     projection.value = next
     if (selectedGroup.value)
       selectedGroup.value =
         resultGroups.value.find((g) => g.id === selectedGroup.value?.id) || null
-    selected.value = next.nodes.find((n) => n.id === selected.value?.id) || null
+    selected.value =
+      allArtifacts.value.find((n) => n.id === selected.value?.id) || null
     const query = new URLSearchParams(location.search)
     query.set('scene', id)
     if (projectId.value) query.set('project', projectId.value)
@@ -518,12 +681,28 @@ function draw(reset = false) {
   const groups = resultGroups.value.filter(
     (group) => !imagesOnly.value || group.files.some((f) => f.image)
   )
-  const visibleGroups =
-    focusedStage.value === null
+  const folder = groups.find((g) => g.id === focusedFolder.value)
+  const visibleGroups = folder
+    ? folder.files
+        .filter((f) => !imagesOnly.value || f.image)
+        .map((f) => ({
+          id: f.id,
+          title: f.title,
+          stage: folder.stage,
+          files: [f],
+          preview: f
+        }))
+    : focusedStage.value === null
       ? []
       : groups.filter((g) => g.stage === focusedStage.value)
+  // Shared evidence has no unique owning folder; never draw a causal arrow
+  // from an arbitrary folder simply because it also displays that file.
+  const fileOwnerCounts = new Map<string, number>()
+  for (const group of visibleGroups)
+    for (const file of group.files)
+      fileOwnerCounts.set(file.id, (fileOwnerCounts.get(file.id) || 0) + 1)
   const items = visibleGroups.map((group) => {
-    nodeGroups.set(group.id, group)
+    if (!folder) nodeGroups.set(group.id, group)
     return { ...group.preview, id: group.id, title: group.title }
   })
   for (let stage = 0; stage < 5; stage++) {
@@ -545,7 +724,11 @@ function draw(reset = false) {
   }
   const prepared = items.map((item) => {
     const jsonNode = isJsonCanvasNode(item)
-    const displayName = item.title
+    const displayName =
+      item.title +
+      (item.status === 'rejected' && !item.title.includes('已拒绝')
+        ? ' · 已拒绝'
+        : '')
     let image = images.get(item.id)
     if (item.image && !image && !jsonNode) {
       image = new Image()
@@ -647,6 +830,20 @@ function draw(reset = false) {
     Object.defineProperty(node, 'title_mode', { value: LiteGraph.NO_TITLE })
     node.onDrawForeground = (ctx) => {
       ctx.save()
+      if (
+        activeIds.value.size &&
+        !relatedIds.value.has(item.id) &&
+        !nodeGroups.get(item.id)?.files.some((f) => relatedIds.value.has(f.id))
+      )
+        ctx.globalAlpha = 0.25
+      if (
+        relatedIds.value.has(item.id) ||
+        nodeGroups.get(item.id)?.files.some((f) => relatedIds.value.has(f.id))
+      ) {
+        ctx.strokeStyle = '#ffcc66'
+        ctx.lineWidth = 4
+        ctx.strokeRect(-5, -5, width + 10, height + 10)
+      }
       if (item.kind === 'step') {
         ctx.fillStyle = '#203b4c'
         ctx.beginPath()
@@ -661,7 +858,10 @@ function draw(reset = false) {
         ctx.font = '16px system-ui'
         ctx.fillText(SCENE_STEP_DESCRIPTIONS[item.stage], width / 2, 58)
         const representative = resultGroups.value.find(
-          (g) => g.stage === item.stage && g.preview.image
+          (g) =>
+            g.stage === item.stage &&
+            g.preview.image &&
+            g.preview.status !== 'rejected'
         )?.preview
         if (representative) {
           let thumb = images.get(representative.id)
@@ -745,7 +945,7 @@ function draw(reset = false) {
     nodePaths.set(node, item.id)
     renderedNodes.set(item.id, node)
     for (const file of nodeGroups.get(item.id)?.files || [])
-      renderedNodes.set(file.id, node)
+      if (fileOwnerCounts.get(file.id) === 1) renderedNodes.set(file.id, node)
   }
   canvas.setDirty(true, true)
   if (reset) fit()
@@ -826,13 +1026,23 @@ onMounted(async () => {
         ctx.restore()
       }
     }
-    for (const edge of projection.value?.edges || []) {
+    for (const edge of [
+      ...(projection.value?.presentation?.relations || []).map((r) => ({
+        ...r,
+        status: r.verification
+      })),
+      ...(projection.value?.edges || []).filter(
+        (edge) =>
+          !(projection.value?.presentation?.relations || []).some(
+            (r) =>
+              (r.from === edge.from && r.to === edge.to) ||
+              (r.from === edge.to && r.to === edge.from)
+          )
+      )
+    ]) {
       const from = renderedNodes.get(edge.from),
         to = renderedNodes.get(edge.to)
-      const activeFiles = new Set(
-        selectedGroup.value?.files.map((f) => f.id) ||
-          (selected.value ? [selected.value.id] : [])
-      )
+      const activeFiles = activeIds.value
       if (!activeFiles.has(edge.from) && !activeFiles.has(edge.to)) continue
       if (!from || !to || from === to) continue
       const x1 = from.pos[0] + from.size[0],
@@ -846,7 +1056,8 @@ onMounted(async () => {
       ctx.fillStyle = canvasSettings.value.linkColor
       ctx.globalAlpha = edge.status === 'stale' ? 0.5 : 0.8
       ctx.lineWidth = canvasSettings.value.linkWidth
-      if (edge.status === 'stale') ctx.setLineDash([6, 4])
+      if (!['present', 'verified'].includes(edge.status))
+        ctx.setLineDash([6, 4])
       ctx.beginPath()
       ctx.moveTo(x1, y1)
       if (canvasSettings.value.linkStyle === 'straight') ctx.lineTo(x2, y2)
@@ -856,6 +1067,10 @@ onMounted(async () => {
         ctx.lineTo(x2, y2)
       } else ctx.bezierCurveTo(x1 + 50, y1, x2 - 50, y2, x2, y2)
       ctx.stroke()
+      if ('type' in edge) {
+        ctx.font = '14px system-ui'
+        ctx.fillText(String(edge.type), midX, midY - 10)
+      }
       if (canvasSettings.value.linkMarker === 'circle') {
         ctx.beginPath()
         ctx.arc(midX, midY, 4, 0, Math.PI * 2)
@@ -874,6 +1089,31 @@ onMounted(async () => {
       ctx.restore()
     }
   }
+  element.value!.addEventListener(
+    'dblclick',
+    (event) => {
+      if (event.button !== 0) return
+      const [x, y] = canvas.convertEventToCanvasOffset(event)
+      const node = [...graph.nodes]
+        .reverse()
+        .find(
+          (n) =>
+            x >= n.pos[0] &&
+            x <= n.pos[0] + n.size[0] &&
+            y >= n.pos[1] &&
+            y <= n.pos[1] + n.size[1]
+        )
+      const group = node && nodeGroups.get(nodePaths.get(node) || '')
+      if (group?.folder) enterFolder(group)
+      else {
+        const file =
+          group?.preview ||
+          allArtifacts.value.find((f) => f.id === (node && nodePaths.get(node)))
+        if (file?.image) previewImage.value = file.id
+      }
+    },
+    true
+  )
   element.value!.addEventListener(
     'contextmenu',
     (e) => {
@@ -1009,6 +1249,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerdown', mouseHistory, true)
   window.removeEventListener('pointerup', mouseHistory, true)
   window.removeEventListener('auxclick', mouseHistory, true)
+  clearTimeout(relationClickTimer)
   disposed = true
   request++
   observer?.disconnect()
@@ -1019,6 +1260,47 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.scene-image-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: #000d;
+}
+.scene-image-preview img {
+  max-width: 96vw;
+  max-height: 94vh;
+  object-fit: contain;
+}
+.scene-image-preview button {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
+.scene-process-relations {
+  position: absolute;
+  top: 80px;
+  left: 12px;
+  max-height: 65vh;
+  overflow: auto;
+  width: 300px;
+  padding: 12px;
+  background: #162834ee;
+  border-radius: 10px;
+}
+.scene-diagnostics {
+  position: absolute;
+  bottom: 100px;
+  left: 12px;
+  max-height: 220px;
+  overflow: auto;
+  max-width: 600px;
+  background: #473b29;
+  padding: 10px;
+}
+
 .scene-guide {
   position: absolute;
   bottom: 16px;
